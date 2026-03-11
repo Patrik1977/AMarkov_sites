@@ -4300,6 +4300,195 @@
     return `OFFICIAL-${String(subjectKey || "").toUpperCase()}-${year || "UNK"}`;
   }
 
+  const RUSSIAN_RECOVERY_TEXT_2026 = [
+    "(1)После своего исторического полёта Юрий Гагарин стал нарасхват.",
+    "(2)Его хотели видеть все страны и все народы, короли и президенты, люди военных и штатских профессий.",
+    "(3)И Гагарин охотно встречался со всеми желающими.",
+    "(4)Но охотнее всего шёл он к курсантам лётных училищ, как бы возвращался в собственную юность.",
+    "(5)Как-то раз, когда официальная встреча уже закончилась, один из курсантов спросил: «О чём вы думали тогда?»",
+    "(6)Гагарин улыбнулся, а курсанты вокруг захохотали.",
+    "(7)«Ну, в общем… я это хотел спросить… когда вы по дорожке шли?» — уточнил курсант.",
+    "(8)Курсанты снова грохнули, но Гагарин остался подчёркнуто серьёзен.",
+    "(9)«Вы имеете в виду Внуковский аэродром?» — спросил он.",
+    "(10)«Правительство?»",
+    "(11)«Во… во!..» — обрадовался курсант.",
+    "(12)Теперь уже все были серьёзны, потому что в наивном вопросе была затронута важная тема молодых душ.",
+    "(13)Гагарин шёл через аэродром, и это было для него кульминацией жизни героя.",
+    "(14)О чём же думал герой в эти высшие мгновения своей жизни?",
+  ].join(" ");
+
+  function createRussianRecoveryQuestions2026() {
+    const sourceHint = "Восстановленный учебный блок по демоверсии ФИПИ 2026";
+    const topic = "Официальная демоверсия ФИПИ 2026 (восстановленные задания)";
+    const tag = "OFFICIAL-RUSSIAN-2026";
+    const base = {
+      subject: "russian",
+      year: 2026,
+      variant: 1,
+      topic,
+      difficulty: "medium",
+      examBlueprintTag: tag,
+      sourceHint,
+      requiredCoverage: true,
+      tags: ["official", "fipi-aligned", "recovered-official-demo-2026"],
+      explanation: createExplanation({
+        correctAnswer: "Сверьтесь с официальным ключом демоверсии 2026.",
+        rule: "Используйте языковое правило из кодификатора и проверьте формат ответа.",
+        why: "Задание восстановлено по структуре официальной демоверсии 2026.",
+      }),
+    };
+
+    return [
+      {
+        ...base,
+        id: "official-russian-2026-recovery-5",
+        segment: "Пунктуация",
+        subtopic: "Задание 5",
+        type: "short-text",
+        prompt:
+          "Расставьте знаки препинания. Укажите все цифры, на месте которых должны стоять запятые.",
+        acceptedAnswers: ["234568", "2 3 4 5 6 8", "2,3,4,5,6,8"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-6",
+        segment: "Орфография",
+        subtopic: "Задание 6",
+        type: "short-text",
+        prompt:
+          "Укажите варианты ответов, в которых дано верное объяснение написания выделенного слова. Запишите номера ответов.",
+        acceptedAnswers: ["25", "2 5", "2,5"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-7",
+        segment: "Орфография",
+        subtopic: "Задание 7",
+        type: "short-text",
+        prompt:
+          "Прочитайте текст. Вставьте пропущенные буквы. Укажите все цифры, на месте которых пишется буква И.",
+        acceptedAnswers: ["39", "3 9", "3,9"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-8",
+        segment: "Лексика",
+        subtopic: "Задание 8",
+        type: "short-text",
+        prompt:
+          "Раскройте скобки и запишите слово «полтора» в соответствующей форме, соблюдая нормы современного русского литературного языка.",
+        acceptedAnswers: ["полутора"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-9",
+        segment: "Лексика",
+        subtopic: "Задание 9",
+        type: "short-text",
+        prompt:
+          "Замените словосочетание «дар артиста», построенное на основе управления, синонимичным словосочетанием со связью согласование.",
+        acceptedAnswers: ["артистический дар", "дар артистический", "артистическийдар", "дарартистический"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-10",
+        segment: "Синтаксис",
+        subtopic: "Задание 10",
+        type: "short-text",
+        prompt:
+          "Прочитайте текст и выполните задания 10–12. Укажите номера предложений, где верно определены языковые особенности текста.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 10-12",
+        passageGroupId: "russian-2026-recovery-text-10-12",
+        acceptedAnswers: ["234", "2 3 4", "2,3,4"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-11",
+        segment: "Текст и речь",
+        subtopic: "Задание 11",
+        type: "short-text",
+        prompt:
+          "По прочитанному тексту укажите правильные варианты ответов. Запишите номера ответов.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 10-12",
+        passageGroupId: "russian-2026-recovery-text-10-12",
+        acceptedAnswers: ["23", "2 3", "2,3"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-12",
+        segment: "Лексика",
+        subtopic: "Задание 12",
+        type: "short-text",
+        prompt:
+          "Из прочитанного текста выпишите слово, соответствующее лексическому значению в задании.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 10-12",
+        passageGroupId: "russian-2026-recovery-text-10-12",
+        acceptedAnswers: ["чахлый"],
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-13-1",
+        segment: "Текст и речь",
+        subtopic: "Задание 13.1",
+        type: "extended-answer-lite",
+        prompt:
+          "Напишите сочинение-рассуждение на тему «Каковы функции многоточия в тексте?». Приведите два примера из текста.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 13.1, 13.2, 13.3",
+        passageGroupId: "russian-2026-recovery-text-13",
+        rubric: {
+          requiredKeyPoints: ["тезис о функции многоточия", "2 примера из текста", "вывод"],
+          optionalKeyPoints: ["связь примеров с тезисом", "точные ссылки на предложения"],
+          checklist: ["Есть позиция автора ответа", "Есть аргументация", "Есть вывод"],
+          strongSample:
+            "Сильный ответ объясняет не только знак, но и его роль в эмоциональном/смысловом развитии текста.",
+          typicalErrors: ["пересказ вместо анализа", "пример без пояснения", "нет вывода"],
+        },
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-13-2",
+        segment: "Текст и речь",
+        subtopic: "Задание 13.2",
+        type: "extended-answer-lite",
+        prompt:
+          "Напишите сочинение-рассуждение на тему «Как Вы понимаете смысл выделенного фрагмента текста?» с двумя примерами.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 13.1, 13.2, 13.3",
+        passageGroupId: "russian-2026-recovery-text-13",
+        rubric: {
+          requiredKeyPoints: ["объяснение смысла фрагмента", "2 примера из текста", "вывод"],
+          optionalKeyPoints: ["точные ссылки на предложения", "связка между примерами"],
+          checklist: ["Тезис сформулирован", "Примеры релевантны", "Вывод логичен"],
+          strongSample: "Сильный ответ даёт интерпретацию, а не пересказ.",
+          typicalErrors: ["формальный ответ без анализа", "один пример вместо двух"],
+        },
+      },
+      {
+        ...base,
+        id: "official-russian-2026-recovery-13-3",
+        segment: "Текст и речь",
+        subtopic: "Задание 13.3",
+        type: "extended-answer-lite",
+        prompt:
+          "Напишите сочинение-рассуждение на нравственную тему по прочитанному тексту. Приведите 2 аргумента.",
+        passage: RUSSIAN_RECOVERY_TEXT_2026,
+        passageTitle: "Текст для выполнения заданий 13.1, 13.2, 13.3",
+        passageGroupId: "russian-2026-recovery-text-13",
+        rubric: {
+          requiredKeyPoints: ["определение понятия", "пример из текста", "пример из опыта/литературы", "вывод"],
+          optionalKeyPoints: ["точность формулировок", "логика композиции"],
+          checklist: ["Тема раскрыта", "Есть аргументация", "Есть вывод"],
+          strongSample: "Сильный ответ показывает причинно-следственные связи и личную позицию.",
+          typicalErrors: ["подмена темы", "отсутствие одного аргумента", "слабая логика"],
+        },
+      },
+    ];
+  }
+
   function officialContextKey(subjectKey, year, variant) {
     return `${subjectKey || "na"}|${year || "na"}|${variant || "na"}`;
   }
@@ -5041,6 +5230,24 @@
       inserted[subjectKey] += 1;
     });
 
+    const recoveredRussian = createRussianRecoveryQuestions2026().map((question) =>
+      normalizeQuestionShape(question),
+    );
+    let recoveredAdded = 0;
+    recoveredRussian.forEach((question) => {
+      const signature = question.signature || createQuestionSignature(question);
+      if (seenBySubject.russian.has(signature)) {
+        return;
+      }
+      seenBySubject.russian.add(signature);
+      OFFICIAL_QUESTION_POOL.russian.push(question);
+      inserted.russian += 1;
+      recoveredAdded += 1;
+    });
+    if (recoveredAdded) {
+      warnings.push(`Добавлены восстановленные русские задания 2026: ${recoveredAdded}.`);
+    }
+
     Object.keys(OFFICIAL_QUESTION_POOL).forEach((subjectKey) => {
       OFFICIAL_QUESTION_POOL[subjectKey] = OFFICIAL_QUESTION_POOL[subjectKey]
         .map((question) => normalizeQuestionShape(question))
@@ -5152,6 +5359,8 @@
               Boolean(question.passage) ||
               question.type === "matching" ||
               question.type === "multi-choice" ||
+              question.type === "short-text" ||
+              (Array.isArray(question.tags) && question.tags.includes("recovered-official-demo-2026")) ||
               /установите соответствие|прочитайте текст/i.test(String(question.prompt || "")),
           )
         : [];
@@ -6303,8 +6512,10 @@
       const preselected = [];
       if (subjectKey === "russian" && block.id === "ru-text" && filtered.length) {
         const priorityChecks = [
+          (question) => Array.isArray(question.tags) && question.tags.includes("recovered-official-demo-2026"),
           (question) => Boolean(question.passage),
           (question) => question.type === "matching",
+          (question) => question.type === "short-text",
           (question) => question.type === "multi-choice",
         ];
         priorityChecks.forEach((predicate, index) => {
