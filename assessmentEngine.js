@@ -44,6 +44,44 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
+  function isDigitSequenceShortText(question) {
+    const answers = Array.isArray(question && question.acceptedAnswers) ? question.acceptedAnswers : [];
+    if (!answers.length) {
+      return false;
+    }
+    let digitLike = 0;
+    let hasLetters = false;
+    answers.forEach((item) => {
+      const token = String(item || "").trim();
+      if (!token) {
+        return;
+      }
+      if (/[A-Za-zА-Яа-яЁё]/.test(token)) {
+        hasLetters = true;
+      }
+      if (/^[\d\s,.;:-]+$/.test(token) && /\d/.test(token)) {
+        digitLike += 1;
+      }
+    });
+    return digitLike > 0 && !hasLetters;
+  }
+
+  function buildShortTextFormatHint(question, numeric) {
+    if (numeric) {
+      return "Формат: только число. Можно использовать точку или запятую (например, 2.5 или 2,5).";
+    }
+    if (!isDigitSequenceShortText(question)) {
+      return "";
+    }
+
+    const accepted = Array.isArray(question.acceptedAnswers) ? question.acceptedAnswers : [];
+    const canonical = accepted
+      .map((item) => String(item || "").replace(/\D/g, ""))
+      .find((item) => item.length >= 2);
+    const sample = canonical || "39";
+    return `Формат: только цифры подряд, без пробелов и запятых (как в бланке ОГЭ). Пример: ${sample}.`;
+  }
+
   function evaluateWithoutAutoKey(isAnswered, message) {
     return {
       isAnswered,
@@ -102,6 +140,14 @@
     input.placeholder = numeric ? "Введите число" : "Введите краткий ответ";
     input.className = "text-answer-input";
     container.appendChild(input);
+
+    const hintText = buildShortTextFormatHint(question, numeric);
+    if (hintText) {
+      const hint = document.createElement("p");
+      hint.className = "setup-note answer-format-hint";
+      hint.textContent = hintText;
+      container.appendChild(hint);
+    }
 
     return {
       getUserAnswer() {

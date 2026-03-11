@@ -295,6 +295,10 @@ input[type="number"] {
   font-size: 13px;
 }
 
+.answer-format-hint {
+  margin-top: 6px;
+}
+
 .meta-block {
   margin-top: 12px;
   border: 1px solid var(--border);
