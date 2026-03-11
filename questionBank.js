@@ -5027,6 +5027,7 @@
   function validateOfficialQuestionCandidate(question) {
     const promptRaw = String((question && question.prompt) || "");
     const prompt = normalizePlainText(promptRaw);
+    const type = normalizeQuestionType(question && question.type);
     if (!prompt || prompt.length < 24) {
       return { ok: false, reason: "слишком короткий prompt" };
     }
@@ -5037,6 +5038,13 @@
     const answerMentions = (promptRaw.match(/Ответ:/gi) || []).length;
     if (answerMentions > 1 && !/\d\)\s*\S+/.test(promptRaw)) {
       return { ok: false, reason: "склейка нескольких заданий" };
+    }
+
+    const hasEnumeratedOptions =
+      /\b1\)\s*\S/.test(promptRaw) || /(?:^|\s)[А-ЯA-Z]\)\s*\S/.test(promptRaw);
+    const saysHasAnswerVariants = /вариант(?:ы)?\s+ответ(?:ов|а)/i.test(promptRaw);
+    if (type !== "extended-answer-lite" && saysHasAnswerVariants && !hasEnumeratedOptions) {
+      return { ok: false, reason: "формулировка про варианты ответов без списка вариантов" };
     }
 
     const blacklist = [
@@ -5250,6 +5258,12 @@
     );
     let recoveredAdded = 0;
     recoveredRussian.forEach((question) => {
+      const quality = validateOfficialQuestionCandidate(question);
+      if (!quality.ok) {
+        dropped.russian += 1;
+        dropReasons[quality.reason] = (dropReasons[quality.reason] || 0) + 1;
+        return;
+      }
       const signature = question.signature || createQuestionSignature(question);
       if (seenBySubject.russian.has(signature)) {
         return;
