@@ -692,6 +692,26 @@
       .toLowerCase();
   }
 
+  function normalizeHumanReadableText(value) {
+    const source = String(value == null ? "" : value)
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "");
+    if (!source.trim()) {
+      return "";
+    }
+
+    return source
+      .replace(/([,;:!?])([A-Za-zА-Яа-яЁё])/g, "$1 $2")
+      .replace(/(?:\b[A-Za-zА-Яа-яЁё]\s+){2,}[A-Za-zА-Яа-яЁё]\b/g, (chunk) =>
+        chunk.replace(/\s+/g, ""),
+      )
+      .replace(/\s+([,.;:!?])/g, "$1")
+      .replace(/([(\["«])\s+/g, "$1")
+      .replace(/\s+([)\]"»])/g, "$1")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
   function optionComparableKey(value) {
     const normalized = normalizeTextToken(value).replace(",", ".");
     if (!normalized) {
@@ -734,6 +754,159 @@
       options.push(value);
     });
     return options;
+  }
+
+  function extractEnumeratedOptionsFromPrompt(prompt) {
+    const source = String(prompt || "").replace(/\r/g, "").trim();
+    if (!source) {
+      return null;
+    }
+
+    const markers = [];
+    const markerRegex = /\b(\d{1,2})\)/g;
+    let match = markerRegex.exec(source);
+    while (match) {
+      const index = match.index;
+      const prev = index > 0 ? source[index - 1] : "";
+      if (prev !== "(") {
+        markers.push({
+          value: Number(match[1]),
+          index,
+          end: index + match[0].length,
+        });
+      }
+      match = markerRegex.exec(source);
+    }
+
+    if (markers.length < 3 || markers[0].value !== 1) {
+      return null;
+    }
+
+    for (let i = 1; i < markers.length; i += 1) {
+      if (markers[i].value !== markers[i - 1].value + 1) {
+        return null;
+      }
+    }
+
+    const promptText = normalizeHumanReadableText(source.slice(0, markers[0].index).replace(/\s+/g, " ").trim());
+    const options = markers
+      .map((marker, index) => {
+        const to = index + 1 < markers.length ? markers[index + 1].index : source.length;
+        let optionText = source.slice(marker.end, to).replace(/\s+/g, " ").trim();
+        optionText = optionText
+          .replace(/^[\-–—:;.,\s]+/, "")
+          .replace(/\s*ответ\s*[:：].*$/i, "")
+          .trim();
+        return normalizeHumanReadableText(optionText);
+      })
+      .filter(Boolean);
+
+    if (options.length < 3) {
+      return null;
+    }
+
+    return {
+      prompt: promptText || source,
+      options: makeUniqueOptions(options),
+    };
+  }
+
+  function extractOptionIndexesFromAnswerToken(rawValue, optionCount) {
+    const value = String(rawValue || "").trim();
+    if (!value || !Number.isInteger(optionCount) || optionCount <= 0) {
+      return [];
+    }
+
+    const tokens = value.match(/\d+/g) || [];
+    if (!tokens.length) {
+      return [];
+    }
+
+    const numbers = [];
+    tokens.forEach((token) => {
+      if (token.length > 1 && Number(token) > optionCount) {
+        token.split("").forEach((digit) => {
+          numbers.push(Number(digit));
+        });
+      } else {
+        numbers.push(Number(token));
+      }
+    });
+
+    return uniqueValues(
+      numbers
+        .filter((num) => Number.isInteger(num) && num >= 1 && num <= optionCount)
+        .map((num) => num - 1),
+    );
+  }
+
+  function normalizeLegacyEnumeratedChoiceQuestion(inputQuestion) {
+    const question = {
+      ...(inputQuestion || {}),
+    };
+    question.prompt = normalizeHumanReadableText(question.prompt || "");
+    question.options = Array.isArray(question.options)
+      ? question.options.map((item) => normalizeHumanReadableText(item))
+      : question.options;
+
+    const parsed = extractEnumeratedOptionsFromPrompt(question.prompt);
+    if (!parsed || !parsed.options.length) {
+      return question;
+    }
+
+    const intentText = normalizeTextToken(parsed.prompt || question.prompt);
+    const shouldBeMultiChoice = /варианты ответов|номера ответов|все цифры|все номера|несколько/i.test(intentText);
+    question.prompt = parsed.prompt || question.prompt;
+    question.options = parsed.options;
+
+    let indexes = [];
+    if (Array.isArray(question.correctAnswers) && question.correctAnswers.length) {
+      indexes = uniqueValues(
+        question.correctAnswers
+          .map((index) => Number(index))
+          .filter((index) => Number.isInteger(index) && index >= 0 && index < question.options.length),
+      );
+    } else {
+      const sources = [];
+      if (question.correctAnswer !== undefined) {
+        sources.push(question.correctAnswer);
+      }
+      if (question.explanation && question.explanation.correctAnswer) {
+        sources.push(question.explanation.correctAnswer);
+      }
+      if (Array.isArray(question.acceptedAnswers)) {
+        sources.push(...question.acceptedAnswers);
+      }
+      indexes = uniqueValues(
+        sources
+          .flatMap((value) => extractOptionIndexesFromAnswerToken(value, question.options.length))
+          .filter((index) => Number.isInteger(index) && index >= 0 && index < question.options.length),
+      );
+    }
+
+    if (shouldBeMultiChoice || indexes.length > 1) {
+      question.type = "multi-choice";
+      question.correctAnswers = indexes;
+      if (indexes.length === 1) {
+        question.correctIndex = indexes[0];
+      }
+    } else {
+      question.type = "single-choice";
+      if (indexes.length) {
+        question.correctIndex = indexes[0];
+      }
+    }
+
+    if ((!Array.isArray(question.acceptedAnswers) || !question.acceptedAnswers.length) && indexes.length > 1) {
+      const oneBased = indexes.map((index) => index + 1);
+      question.acceptedAnswers = uniqueValues([
+        oneBased.join(""),
+        oneBased.join(" "),
+        oneBased.join(","),
+      ]).filter(Boolean);
+    }
+
+    return question;
   }
 
   function makeChoiceQuestion(correctValue, distractors, rng) {
@@ -5772,11 +5945,27 @@
   }
 
   function normalizeQuestionShape(question, fallbackFactory) {
+    question = normalizeLegacyEnumeratedChoiceQuestion(question);
+    question.prompt = normalizeHumanReadableText(question.prompt || "");
+    if (Array.isArray(question.options)) {
+      question.options = question.options.map((item) => normalizeHumanReadableText(item));
+    }
+    if (typeof question.passage === "string") {
+      question.passage = normalizeHumanReadableText(question.passage);
+    }
+    if (typeof question.passageTitle === "string") {
+      question.passageTitle = normalizeHumanReadableText(question.passageTitle);
+    }
+
     const explanation = question.explanation || {};
-    const rule = question.rule || explanation.rule || "";
-    const steps = question.steps || explanation.stepByStep || "";
-    const commonMistake = question.commonMistake || explanation.commonMistakes || "";
-    const recognitionTip = question.recognitionTip || explanation.recognitionTip || "";
+    const rule = normalizeHumanReadableText(question.rule || explanation.rule || "");
+    const steps = normalizeHumanReadableText(question.steps || explanation.stepByStep || "");
+    const commonMistake = normalizeHumanReadableText(
+      question.commonMistake || explanation.commonMistakes || "",
+    );
+    const recognitionTip = normalizeHumanReadableText(
+      question.recognitionTip || explanation.recognitionTip || "",
+    );
     const fallbackType = fallbackFactory && fallbackFactory.type;
     const type = normalizeQuestionType(question.type || fallbackType || "single-choice");
     const answerFormat = question.format || (QUESTION_TYPE_META[type] && QUESTION_TYPE_META[type].answerFormat) || "single-select";
@@ -5827,14 +6016,17 @@
           : defaultExpectedTimeSec(difficulty, type),
       sourceHint: question.sourceHint || "Локальный банк ОГЭ-тренажера",
       explanation: {
-        correctAnswer:
+        correctAnswer: normalizeHumanReadableText(
           explanation.correctAnswer || options[question.correctIndex] || "",
-        why: explanation.why || "",
+        ),
+        why: normalizeHumanReadableText(explanation.why || ""),
         rule,
-        formula: explanation.formula || "Не применяется для этого типа задания.",
+        formula: normalizeHumanReadableText(
+          explanation.formula || "Не применяется для этого типа задания.",
+        ),
         stepByStep: steps,
         commonMistakes: commonMistake,
-        alternateMethod: explanation.alternateMethod || "",
+        alternateMethod: normalizeHumanReadableText(explanation.alternateMethod || ""),
         recognitionTip,
       },
       rule,
@@ -6440,7 +6632,48 @@
     return indexes;
   }
 
-  function selectQuestionsByPlan(candidates, count, difficultyPlan, rng, used) {
+  function variantBucketBySignature(signature) {
+    const value = String(signature || "");
+    return (hashString(`variant-bucket-${value}`) % VARIANT_COUNT) + 1;
+  }
+
+  function circularDistance(from, to, maxValue) {
+    const diff = Math.abs(Number(from) - Number(to));
+    return Math.min(diff, Math.max(0, maxValue - diff));
+  }
+
+  function buildVariantRanker(seedVariant, preferredSignatures) {
+    const normalizedSeed = Math.min(VARIANT_COUNT, Math.max(1, Number(seedVariant) || 1));
+    const preferred = preferredSignatures || new Set();
+    return function rankQuestionByVariant(question) {
+      const signature = question.signature || createQuestionSignature(question);
+      const bucket = variantBucketBySignature(signature);
+      const distance = circularDistance(normalizedSeed, bucket, VARIANT_COUNT);
+      const preferredBoost = preferred.has(signature) ? -1.75 : 0;
+      const jitter = (hashString(`ranker-${normalizedSeed}-${signature}`) % 1000) / 10000;
+      return distance + preferredBoost + jitter;
+    };
+  }
+
+  function orderCandidates(candidates, rng, ranker) {
+    if (!Array.isArray(candidates) || !candidates.length) {
+      return [];
+    }
+    if (!ranker) {
+      const order = pickRandomIndexes(candidates.length, rng);
+      return order.map((index) => candidates[index]);
+    }
+    const scored = candidates.map((item, index) => ({
+      item,
+      index,
+      score: Number(ranker(item)),
+      tie: rng(),
+    }));
+    scored.sort((a, b) => a.score - b.score || a.tie - b.tie || a.index - b.index);
+    return scored.map((entry) => entry.item);
+  }
+
+  function selectQuestionsByPlan(candidates, count, difficultyPlan, rng, used, ranker) {
     const selected = [];
     const remaining = candidates.slice();
     const removeBySignature = (item) => {
@@ -6455,9 +6688,9 @@
         return;
       }
       const chunk = remaining.filter((item) => item.difficulty === difficulty);
-      const order = pickRandomIndexes(chunk.length, rng);
-      for (let i = 0; i < order.length && selected.length < count && amount > 0; i += 1) {
-        const candidate = chunk[order[i]];
+      const ordered = orderCandidates(chunk, rng, ranker);
+      for (let i = 0; i < ordered.length && selected.length < count && amount > 0; i += 1) {
+        const candidate = ordered[i];
         const signature = candidate.signature || createQuestionSignature(candidate);
         if (used.has(signature)) {
           continue;
@@ -6470,9 +6703,9 @@
 
     if (selected.length < count) {
       const fallback = remaining.filter((item) => !used.has(item.signature || createQuestionSignature(item)));
-      const order = pickRandomIndexes(fallback.length, rng);
-      for (let i = 0; i < order.length && selected.length < count; i += 1) {
-        const candidate = fallback[order[i]];
+      const orderedFallback = orderCandidates(fallback, rng, ranker);
+      for (let i = 0; i < orderedFallback.length && selected.length < count; i += 1) {
+        const candidate = orderedFallback[i];
         selected.push(candidate);
         removeBySignature(candidate);
       }
@@ -6518,6 +6751,16 @@
     const missingBlocks = [];
     const softMisses = [];
     const rng = createRng(hashString(`blueprint-${subjectKey}-${modelKey}-${seedVariant}-${requestedCount}`));
+    const preferredSignatures = new Set(
+      getQuestions(
+        subjectKey,
+        Math.min(VARIANT_COUNT, Math.max(1, seedVariant)),
+        SUBJECT_CONFIG[subjectKey].defaultQuestions,
+      )
+        .map((item) => normalizeQuestionShape(item))
+        .map((item) => item.signature || createQuestionSignature(item)),
+    );
+    const variantRanker = buildVariantRanker(seedVariant, preferredSignatures);
 
     blueprint.blocks.forEach((block) => {
       const blockCount = blockPlan[block.id] || 0;
@@ -6547,7 +6790,7 @@
           (question) => question.type === "short-text",
           (question) => question.type === "multi-choice",
         ];
-        priorityChecks.forEach((predicate, index) => {
+        priorityChecks.forEach((predicate) => {
           if (preselected.length >= blockCount) {
             return;
           }
@@ -6561,15 +6804,11 @@
           if (!candidates.length) {
             return;
           }
-          const picked = selectFromPoolDeterministic(
-            candidates,
-            1,
-            subjectKey,
-            `ru-text-priority-${variantId}-${index}`,
-            used,
-          );
-          if (picked.length) {
-            preselected.push(picked[0]);
+          const ranked = orderCandidates(candidates, rng, variantRanker);
+          if (ranked.length) {
+            const picked = ranked[0];
+            preselected.push(picked);
+            used.add(picked.signature || createQuestionSignature(picked));
           }
         });
       }
@@ -6583,7 +6822,7 @@
 
       const remainderCount = Math.max(0, blockCount - preselected.length);
       const chunk = preselected.concat(
-        selectQuestionsByPlan(filtered, remainderCount, difficultyPlan, rng, used),
+        selectQuestionsByPlan(filtered, remainderCount, difficultyPlan, rng, used, variantRanker),
       ).slice(0, blockCount);
 
       if (chunk.length < blockCount && block.required) {
@@ -6618,6 +6857,7 @@
         additionalPlan,
         rng,
         used,
+        variantRanker,
       );
       selected.push(...additional.map((question) => ({ ...question, blueprintBlock: "fallback" })));
     }

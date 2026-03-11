@@ -843,6 +843,47 @@
     return map[scenarioKey] || "—";
   }
 
+  function difficultyLabel(level) {
+    const map = {
+      basic: "базовая",
+      medium: "средняя",
+      hard: "высокая",
+    };
+    return map[level] || String(level || "—");
+  }
+
+  function orderPolicyLabel(policy) {
+    const map = {
+      "fixed-by-block": "фиксированный по блокам",
+      "balanced-randomized": "сбалансированный",
+    };
+    return map[policy] || String(policy || "—");
+  }
+
+  function buildQuestionSourceLabel(question) {
+    const source = String((question && question.sourceHint) || "").trim();
+    const tag = String((question && question.examBlueprintTag) || "").trim();
+    const yearMatch = String(source + " " + tag).match(/(20\d{2})/);
+    const year = yearMatch ? yearMatch[1] : "";
+
+    if (
+      /^OFFICIAL-[A-Z]+-\d{4}/i.test(tag) ||
+      /фипи|официальн|демоверси/i.test(source)
+    ) {
+      return year ? `Источник: демоверсия ФИПИ ${year}` : "Источник: демоверсия ФИПИ";
+    }
+
+    if (!source || /локальный банк огэ-тренажера/i.test(source)) {
+      return "";
+    }
+
+    const normalized = source.replace(/^Официальный материал\s*/i, "").trim();
+    if (!normalized) {
+      return "";
+    }
+    return normalized.length > 90 ? `Источник: ${normalized.slice(0, 87)}...` : `Источник: ${normalized}`;
+  }
+
   function isBlueprintScenario(scenarioKey) {
     return (
       scenarioKey === EXAM_SCENARIOS.subjectModelExact ||
@@ -942,7 +983,12 @@
     if (!readiness) {
       return "Н/Д";
     }
-    return `${readiness.level} (${readiness.readinessScore}%)`;
+    const levelMap = {
+      weak: "слабая",
+      unstable: "нестабильная",
+      strong: "сильная",
+    };
+    return `${levelMap[readiness.level] || readiness.level} (${readiness.readinessScore}%)`;
   }
 
   function buildSubjectReadiness(subjectKey) {
@@ -1583,7 +1629,7 @@
           <tbody>${rows}</tbody>
         </table>
         <p class="setup-note">Модель: ${escapeHtml(blueprint.title)} · лимит времени ${blueprint.timeLimitMinutes} мин. · порядок: ${escapeHtml(
-          blueprint.orderPolicy,
+          orderPolicyLabel(blueprint.orderPolicy),
         )}</p>
         <p class="setup-note">Структура: ${escapeHtml(structureSummary)}</p>
         <p class="info-banner">${escapeHtml((blueprint.notices && blueprint.notices.disclaimer) || "")}</p>
@@ -1599,7 +1645,7 @@
       .join("");
 
     const difficultyRows = Object.entries(matrix.difficultyPlan)
-      .map(([level, amount]) => `<tr><td>${escapeHtml(level)}</td><td>${amount}</td></tr>`)
+      .map(([level, amount]) => `<tr><td>${escapeHtml(difficultyLabel(level))}</td><td>${amount}</td></tr>`)
       .join("");
 
     ui.coverageBox.innerHTML = `
@@ -1611,7 +1657,7 @@
         <thead><tr><th>Сложность</th><th>План</th></tr></thead>
         <tbody>${difficultyRows}</tbody>
       </table>
-      <p class="setup-note">Минимальная доля hard: ${Math.round(matrix.hardShareMin * 100)}%</p>
+      <p class="setup-note">Минимальная доля сложных заданий: ${Math.round(matrix.hardShareMin * 100)}%</p>
     `;
   }
 
@@ -1708,12 +1754,12 @@
 
   function getTopicStatusLabel(status) {
     if (status === "strong") {
-      return { label: "strong", badge: "badge-strong" };
+      return { label: "сильная", badge: "badge-strong" };
     }
     if (status === "weak") {
-      return { label: "weak", badge: "badge-weak" };
+      return { label: "слабая", badge: "badge-weak" };
     }
-    return { label: "unstable", badge: "badge-unstable" };
+    return { label: "нестабильная", badge: "badge-unstable" };
   }
 
   function renderWeakTopicsBlock() {
@@ -2249,7 +2295,7 @@
     if (media && media.type === "audio") {
       pieces.push(`
         <div class="supplement-card">
-          <strong>Listening-lite</strong>
+          <strong>Аудирование (lite)</strong>
           <p class="setup-note">${
             media.description
               ? escapeHtml(media.description)
@@ -2265,7 +2311,7 @@
           }">Аудиофайл не подключен. Используется mock-материал.</p>
           ${
             media.mockTranscript
-              ? `<details><summary>Mock audio / transcript</summary><p>${escapeHtml(media.mockTranscript)}</p></details>`
+              ? `<details><summary>Mock-аудио / транскрипт</summary><p>${escapeHtml(media.mockTranscript)}</p></details>`
               : ""
           }
         </div>
@@ -2275,7 +2321,7 @@
     if (speakingLite) {
       pieces.push(`
         <div class="supplement-card">
-          <strong>Speaking-lite</strong>
+          <strong>Устная часть (lite)</strong>
           <p class="setup-note">${
             speakingLite.taskCard
               ? escapeHtml(speakingLite.taskCard)
@@ -2288,7 +2334,7 @@
           </div>
           ${
             speakingLite.sampleAnswer
-              ? `<details><summary>Sample answer</summary><p>${escapeHtml(speakingLite.sampleAnswer)}</p></details>`
+              ? `<details><summary>Образец ответа</summary><p>${escapeHtml(speakingLite.sampleAnswer)}</p></details>`
               : ""
           }
           ${
@@ -2305,7 +2351,7 @@
     if (writingLite) {
       pieces.push(`
         <div class="supplement-card">
-          <strong>Writing-lite</strong>
+          <strong>Письмо (lite)</strong>
           <p class="setup-note">${escapeHtml(writingLite.prompt || "Письменный учебный ответ по структуре.")}</p>
           ${
             Array.isArray(writingLite.expectedStructure) && writingLite.expectedStructure.length
@@ -2368,9 +2414,17 @@
     ui.progressBar.style.width = `${(number / session.questions.length) * 100}%`;
 
     const typeLabel = AssessmentEngine.TYPE_LABELS[AssessmentEngine.normalizeType(question.type)] || "Один ответ";
+    const metaParts = [
+      `Сложность: ${difficultyLabel(question.difficulty)}`,
+      `тип: ${typeLabel}`,
+    ];
+    const sourceLabel = buildQuestionSourceLabel(question);
+    if (sourceLabel) {
+      metaParts.push(sourceLabel);
+    }
 
     ui.questionTopic.textContent = `${question.segment} · ${question.topic}`;
-    ui.questionMeta.textContent = `Сложность: ${question.difficulty} · тип: ${typeLabel} · ${question.examBlueprintTag}`;
+    ui.questionMeta.textContent = metaParts.join(" · ");
     ui.questionPrompt.textContent = question.prompt;
     renderQuestionSupplement(question);
 
@@ -3333,7 +3387,7 @@
           <td>${escapeHtml(item.topic)}</td>
           <td>${escapeHtml(item.subtopic)}</td>
           <td>${item.totalQuestions}</td>
-          <td class="mono">b:${item.byDifficulty.basic || 0} m:${item.byDifficulty.medium || 0} h:${item.byDifficulty.hard || 0}</td>
+          <td class="mono">баз:${item.byDifficulty.basic || 0} · ср:${item.byDifficulty.medium || 0} · слож:${item.byDifficulty.hard || 0}</td>
           <td>${escapeHtml((item.types || []).join(", "))}</td>
           <td>${escapeHtml((item.formats || []).join(", "))}</td>
           <td><span class="coverage-status ${coverageStatusChip(item.status)}">${escapeHtml(item.status)}</span></td>
@@ -3435,7 +3489,7 @@
           <td>${item.weakTopics}</td>
           <td>${item.staleTopics}</td>
           <td>${trend}</td>
-          <td>${(item.readiness && item.readiness.level) || "-"} (${(item.readiness && item.readiness.readinessScore) || 0}%)</td>
+          <td>${readinessLabel(item.readiness)}</td>
           <td>нет:${item.coverageSummary.noCoverage} · слабое:${item.coverageSummary.weakCoverage}</td>
         </tr>`;
       })
@@ -3471,18 +3525,17 @@
       .map(([subject, payload]) => {
         const alignment = payload.alignment || {};
         const alignmentStatus =
-          alignment.status === "aligned" ? "aligned" : "needs-attention";
+          alignment.status === "aligned" ? "ok" : "needs-attention";
+        const alignmentLabel = alignment.status === "aligned" ? "в норме" : "требует внимания";
         return `<tr>
           <td>${escapeHtml(subject)}</td>
           <td>${payload.questionCount}</td>
           <td>${payload.officialQuestionCount || 0}</td>
           <td>${payload.topicCount}</td>
-          <td class="mono">b:${payload.byDifficulty.basic || 0} m:${payload.byDifficulty.medium || 0} h:${payload.byDifficulty.hard || 0}</td>
+          <td class="mono">баз:${payload.byDifficulty.basic || 0} · ср:${payload.byDifficulty.medium || 0} · слож:${payload.byDifficulty.hard || 0}</td>
           <td>${escapeHtml(Object.keys(payload.byFormat || payload.byType).join(", "))}</td>
           <td>нет:${payload.coverage.noCoverage} · слабое:${payload.coverage.weakCoverage}</td>
-          <td><span class="coverage-status ${alignmentStatus}">${escapeHtml(
-            alignment.status === "aligned" ? "aligned" : "needs-attention",
-          )}</span></td>
+          <td><span class="coverage-status ${alignmentStatus}">${escapeHtml(alignmentLabel)}</span></td>
         </tr>`;
       })
       .join("");
@@ -3507,11 +3560,11 @@
       <p class="setup-note">Официальный пакет: ${
         officialPack.totalQuestions || 0
       } вопросов · годы: ${escapeHtml((officialPack.years || []).join(", ") || "не подключены")}</p>
-      <p class="setup-note">Explanation quality: strong ${explanationQuality.strong || 0} · medium ${
+      <p class="setup-note">Качество объяснений: сильных ${explanationQuality.strong || 0} · средних ${
         explanationQuality.medium || 0
-      } · weak ${explanationQuality.weak || 0} · average ${explanationQuality.averageScore || 0}%</p>
+      } · слабых ${explanationQuality.weak || 0} · средний балл ${explanationQuality.averageScore || 0}%</p>
       <table class="status-table">
-        <thead><tr><th>Предмет</th><th>Вопросов</th><th>Официальных</th><th>Тем</th><th>Сложности</th><th>Форматы</th><th>Пустоты покрытия</th><th>FIPI alignment</th></tr></thead>
+        <thead><tr><th>Предмет</th><th>Вопросов</th><th>Официальных</th><th>Тем</th><th>Сложности</th><th>Форматы</th><th>Пустоты покрытия</th><th>Соответствие ФИПИ</th></tr></thead>
         <tbody>${subjectRows}</tbody>
       </table>
       <div class="analytics-grid" style="margin-top:10px">
@@ -3526,7 +3579,7 @@
       </div>
       <div class="analytics-grid" style="margin-top:10px">
         <article class="analytics-card">
-          <h3>Coverage gaps</h3>
+          <h3>Пробелы покрытия</h3>
           ${coverageGaps.length
             ? coverageGaps
                 .map(
@@ -3552,20 +3605,20 @@
       </div>
       <div class="analytics-grid" style="margin-top:10px">
         <article class="analytics-card">
-          <h3>Missing explanation fields</h3>
+          <h3>Нехватка полей объяснения</h3>
           ${missingExplanation.length
             ? missingExplanation
                 .map(
                   (item) =>
-                    `<p>${escapeHtml(item.subject)} · ${escapeHtml(item.id)} · missing: ${escapeHtml(
+                    `<p>${escapeHtml(item.subject)} · ${escapeHtml(item.id)} · отсутствует: ${escapeHtml(
                       item.missing.join(", "),
                     )}</p>`,
                 )
                 .join("")
-            : '<p class="setup-note">Критичных пропусков в explanation нет.</p>'}
+            : '<p class="setup-note">Критичных пропусков в объяснениях нет.</p>'}
         </article>
         <article class="analytics-card">
-          <h3>Near duplicates</h3>
+          <h3>Похожие дубликаты</h3>
           ${nearDuplicates.length
             ? nearDuplicates
                 .map(
@@ -3580,18 +3633,18 @@
       </div>
       <div class="analytics-grid" style="margin-top:10px">
         <article class="analytics-card">
-          <h3>Low difficulty diversity</h3>
+          <h3>Низкое разнообразие сложностей</h3>
           ${lowDiversity.length
             ? lowDiversity
                 .map(
                   (item) =>
-                    `<p>${escapeHtml(item.subject)} · b:${item.byDifficulty.basic} m:${item.byDifficulty.medium} h:${item.byDifficulty.hard}</p>`,
+                    `<p>${escapeHtml(item.subject)} · баз:${item.byDifficulty.basic} · ср:${item.byDifficulty.medium} · слож:${item.byDifficulty.hard}</p>`,
                 )
                 .join("")
             : '<p class="setup-note">Диверсификация сложностей достаточная.</p>'}
         </article>
         <article class="analytics-card">
-          <h3>Exact duplicate candidates</h3>
+          <h3>Кандидаты в точные дубликаты</h3>
           ${duplicateCandidates.length
             ? duplicateCandidates
                 .map((item) => `<p>${escapeHtml(item.subject)} · ${item.ids.length} дублей сигнатуры</p>`)
