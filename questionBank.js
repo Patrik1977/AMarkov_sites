@@ -123,9 +123,9 @@
       mandatorySegments: ["Grammar", "Vocabulary", "Reading", "Use of English", "Communication"],
       hardShareMin: 0.34,
       fipiLinks: {
-        codifier: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/iya_9_2026.zip",
-        specification: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/iya_9_2026.zip",
-        demo: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/iya_9_2026.zip",
+        codifier: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/aya_9_2026.zip",
+        specification: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/aya_9_2026.zip",
+        demo: "https://doc.fipi.ru/oge/demoversii-specifikacii-kodifikatory/2026/aya_9_2026.zip",
         navigator: "https://fipi.ru/navigator-podgotovki/navigator-oge",
       },
     },
@@ -4692,14 +4692,63 @@
     return Number.isInteger(fallback) && fallback > 0 ? fallback : null;
   }
 
-  function normalizeOfficialPromptText(prompt) {
-    return String(prompt || "")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\s*\n+\s*/g, " ")
-      .replace(/([А-Яа-яA-Za-z]+)\.\s*9\s*класс[^.]*-\s*\d+\s*\/\s*\d+/g, " ")
-      .replace(/\u00a0/g, " ")
+  function findOfficialTaskStart(text) {
+    const source = String(text || "");
+    const patterns = [
+      /(?:Установите соответствие|На рисунке|Выберите(?:\s+из\s+предложенного\s+перечня)?|Определите|Как(?:ой|ая|ое|ова)|Сколько|Чему\s+равн|Прочитайте|Рассчитайте|Используя|Запишите|Решите|Найдите|Укажите|Имеется|Положительно|Линейный\s+проводник|Радиоактивный|Шар(?:ы)?|Мяч\s+бросают|В\s+открытый\s+сосуд|К\s+источнику|Симметричный|Треугольники\s+подобны|В\s+арифметической\s+прогрессии|Для\s+функции)/i,
+      /(?:Juan|Alicia|Marisa|Jorge|Ana|Julio|Elena|Javier|Nico|Bea|La\s+Constituci[oó]n|Despu[eé]s|Este\s+fin\s+de\s+semana|En\s+el\s+museo|El\s+revisor|In[eé]s)/i,
+    ];
+
+    let bestIndex = -1;
+    patterns.forEach((pattern) => {
+      const match = source.match(pattern);
+      if (match && Number.isInteger(match.index) && (bestIndex === -1 || match.index < bestIndex)) {
+        bestIndex = match.index;
+      }
+    });
+    return bestIndex;
+  }
+
+  function stripOfficialLeadingNoise(text) {
+    let cleaned = String(text || "").trim();
+    if (!cleaned) {
+      return "";
+    }
+
+    cleaned = cleaned
+      .replace(/^(?:&%end_page&%|&%|%)+/gi, " ")
+      .replace(/^(?:[0-9]+\s+){2,12}(?=[А-ЯA-ZЁ])/u, "")
+      .replace(/^(?:[А-ЯA-ZЁ]\s+){2,10}(?=(?:Установите|На рисунке|Выберите|Определите|Как|Сколько|Чему|Прочитайте|Рассчитайте|Используя|Запишите|Решите|Найдите|Укажите))/u, "")
+      .replace(/^(?:Ом\.|кг\.|г\.|м\.|см\.|мм\.|Н\.|А\.|В\.|Вт\.|кВт\.|Дж\.|кДж\.|А\.|Б\.|В\.)\s*/u, "")
+      .replace(/^\d+\s+(?=(?:Установите|На рисунке|Выберите|Определите|Как|Сколько|Чему|Прочитайте|Рассчитайте|Используя|Запишите|Решите|Найдите|Укажите))/u, "")
       .replace(/\s{2,}/g, " ")
       .trim();
+
+    const startIndex = findOfficialTaskStart(cleaned);
+    if (startIndex > 0 && startIndex < 180) {
+      const prefix = cleaned.slice(0, startIndex);
+      const letterCount = (prefix.match(/[A-Za-zА-Яа-яЁё]/g) || []).length;
+      if (letterCount <= 16 || /^[\d\s.,;:()+\-–—/%&№А-ЯA-ZЁ]+$/u.test(prefix)) {
+        cleaned = cleaned.slice(startIndex).trim();
+      }
+    }
+
+    return cleaned;
+  }
+
+  function normalizeOfficialPromptText(prompt) {
+    let text = String(prompt || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/&%end_page&%|&%|%/gi, " ")
+      .replace(/([А-Яа-яA-Za-z]+)\.\s*9\s*класс[^.]*-\s*\d+\s*\/\s*\d+/g, " ")
+      .replace(/(?:Русский\s+язык|Математика|Физика|Английский\s+язык)\.\s*9\s*класс[\s\S]{0,50}?\d+\s*\/\s*\d+/gi, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\s*\n+\s*/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    text = stripOfficialLeadingNoise(text);
+    return text;
   }
 
   function parseOfficialAnswerVariants(rawValue) {
@@ -4962,23 +5011,60 @@
       return "";
     }
 
-    const markers = [
+    let working = source;
+
+    const prefixMarkers = [
+      "Система оценивания экзаменационной работы",
+      "Критерии оценивания выполнения заданий",
+      "Общие требования к выполнению заданий с развёрнутым ответом",
+      "Содержание критерия",
+      "Максимальный балл",
+      "Номер задания Правильный ответ",
+    ];
+
+    let lastPrefixEnd = -1;
+    prefixMarkers.forEach((marker) => {
+      const idx = working.toLowerCase().indexOf(marker.toLowerCase());
+      if (idx >= 0) {
+        const end = idx + marker.length;
+        if (end > lastPrefixEnd) {
+          lastPrefixEnd = end;
+        }
+      }
+    });
+
+    if (lastPrefixEnd >= 0) {
+      const afterPrefix = working.slice(lastPrefixEnd);
+      const taskStart = findOfficialTaskStart(afterPrefix);
+      if (taskStart >= 0) {
+        working = afterPrefix.slice(taskStart).trim();
+      }
+    }
+
+    const tailMarkers = [
       "Проверьте, чтобы каждый ответ был записан рядом с номером соответствующего задания",
       "Система оценивания экзаменационной работы",
       "Критерии оценивания выполнения заданий",
       "Общие требования к выполнению заданий с развёрнутым ответом",
       "Часть 3 Используя прочитанный текст из части 2, выполните",
+      "Возможный вариант решения",
+      "Образец возможного ответа",
+      "Пример ответа",
+      "Решение.",
+      "Содержание критерия",
+      "Максимальный балл",
     ];
 
     let cutIndex = -1;
-    markers.forEach((marker) => {
-      const idx = source.toLowerCase().indexOf(marker.toLowerCase());
-      if (idx > 60 && (cutIndex === -1 || idx < cutIndex)) {
+    tailMarkers.forEach((marker) => {
+      const idx = working.toLowerCase().indexOf(marker.toLowerCase());
+      if (idx > 20 && (cutIndex === -1 || idx < cutIndex)) {
         cutIndex = idx;
       }
     });
 
-    return cutIndex > 0 ? source.slice(0, cutIndex).trim() : source;
+    working = cutIndex > 0 ? working.slice(0, cutIndex).trim() : working;
+    return stripOfficialLeadingNoise(working);
   }
 
   function buildOfficialAnswerMaps(entries) {
@@ -5049,6 +5135,10 @@
       ...question,
       prompt: promptText || question.prompt || "",
     };
+
+    if (subjectKey === "physics" && Number(year) === 2024 && Number(questionNumber) === 15) {
+      repaired.prompt = String(repaired.prompt || "").replace(/^.*?(Два закона геометрической оптики)/, "$1");
+    }
 
     if (split.passageText) {
       if (runtime && runtime.lastPassageByContext) {
@@ -5208,6 +5298,12 @@
       return { ok: false, reason: "слишком длинный prompt" };
     }
 
+    const normalizedPromptRaw = normalizeOfficialPromptText(promptRaw);
+    const taskStarterCount = (normalizedPromptRaw.match(/(?:Установите соответствие|На рисунке|Выберите|Определите|Как(?:ой|ая|ое|ова)|Сколько|Чему\s+равн|Прочитайте|Рассчитайте|Используя|Запишите|Решите|Найдите|Укажите)/gi) || []).length;
+    if (taskStarterCount >= 3) {
+      return { ok: false, reason: "склейка нескольких заданий" };
+    }
+
     const answerMentions = (promptRaw.match(/Ответ:/gi) || []).length;
     if (answerMentions > 1 && !/\d\)\s*\S+/.test(promptRaw)) {
       return { ok: false, reason: "склейка нескольких заданий" };
@@ -5242,10 +5338,23 @@
       return { ok: false, reason: "служебный/критериальный текст, а не задание" };
     }
 
+    if (/(решение\.|возможный вариант решения|образец возможного ответа|содержание критерия|максимальный балл)/i.test(promptRaw)) {
+      return { ok: false, reason: "утечка решения/критериев в prompt" };
+    }
+
+    if (String((question && question.subject) || "") === "english") {
+      const spanishHits = (promptRaw.match(/\b(?:el|la|los|las|una|un|porque|pero|que|del|para|con|sin|verdadero|falso|no\s+se\s+menciona|señora|hab[ií]a|despu[eé]s|este\s+fin\s+de\s+semana|constituci[oó]n|museo|playa|mensaje|avisa|vendr[aá]|casero|acompañar|llama|sábado)\b/gi) || []).length;
+      const englishHits = (promptRaw.match(/\b(?:the|and|with|because|true|false|not\s+stated|choose|reading|listen|complete|match|email|letter|friend|museum|train|message|job|weekend|work)\b/gi) || []).length;
+      if (englishHits === 0 && (spanishHits >= 1 || /[áéíóúñ¿¡]/i.test(promptRaw))) {
+        return { ok: false, reason: "не тот язык для предмета" };
+      }
+    }
+
     const looksLikeTask =
       /[?]/.test(promptRaw) ||
       /\b1\)\s*\S+/.test(promptRaw) ||
-      /(выберите|найдите|определите|укажите|решите|запишите|установите|прочитайте)/i.test(promptRaw);
+      /(выберите|найдите|определите|укажите|решите|запишите|установите|прочитайте|как(?:ой|ая|ое|ова)|сколько|чему\s+равн|используя|рассчитайте)/i.test(promptRaw) ||
+      /\b(?:Juan|Alicia|Marisa|Jorge|Ana|Julio|Elena|Javier|Nico|Bea|In[eé]s|Verdadero|Falso|No\s+se\s+menciona)\b/i.test(promptRaw);
     if (!looksLikeTask) {
       return { ok: false, reason: "не распознан формат задания" };
     }
