@@ -319,6 +319,26 @@ label.option-row:focus-within {
   margin: 10px 0 12px;
 }
 
+.question-media-wrap {
+  margin: 0 0 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.question-media-image {
+  width: 100%;
+  max-width: 560px;
+  max-height: 340px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.question-media-wrap .image-fallback {
+  min-height: 160px;
+}
+
 .options-box {
   display: grid;
   gap: 8px;

@@ -1,4 +1,24 @@
 (function attachExamCore(global) {
+  var IMAGE_REQUIRED_PATTERNS = [
+    /на\s+(?:рисунк(?:е|у|а)|иллюстрац(?:ии|ию|ия)|схем(?:е|у|а))/i,
+    /по\s+(?:рисунк(?:у|е)|иллюстрац(?:ии|ию)|схем(?:е|у))/i,
+    /согласно\s+рисунк(?:у|е)/i,
+    /изображ[её]н(?:о|а|ы|ный|ная)?/i,
+    /изображенн(?:ый|ая|ые|ого|ому|ыми|ых)/i,
+    /показан(?:о|а|ы)?\s+на\s+(?:рисунк(?:е|у)|иллюстрац(?:ии|ию)|схем(?:е|у))/i,
+    /обозначен(?:о|а|ы)?\s+букв(?:ой|ами|а)/i,
+    /букв[аы]\s*[A-Za-zА-Яа-я]/i,
+    /по\s+данной\s+схеме/i,
+  ];
+
+  var EXPLANATION_NOISE_PATTERNS = [
+    /для\s+успешной\s+сдачи\s+экзамена[^.?!\n]*(?:зелен|зел[её]н)/gi,
+    /(?:как|то)\s+выделено\s+зелен[а-я\s-]*выше/gi,
+    /смотрите\s+красн[а-я\s-]*рамк/gi,
+    /как\s+подсвечен[а-я\s-]*/gi,
+    /выделено\s+зелен[а-я\s-]*выше/gi,
+  ];
+
   function clamp(num, min, max) {
     if (num < min) return min;
     if (num > max) return max;
@@ -37,9 +57,184 @@
     return [options.scenario, options.vesselType || "-", options.area || "-", options.sessionMode || "-"].join("::");
   }
 
-  function validateQuestionBank(questions) {
+  function normalizePrompt(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  function normalizeMediaSrc(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^\.\//, "")
+      .replace(/^\/+/, "");
+  }
+
+  function makeMediaLookup(mediaManifest) {
+    var lookup = {};
+    if (!Array.isArray(mediaManifest)) {
+      return { lookup: lookup, enforce: false };
+    }
+
+    mediaManifest.forEach(function (src) {
+      var key = normalizeMediaSrc(src);
+      if (!key) return;
+      lookup[key] = true;
+    });
+
+    return {
+      lookup: lookup,
+      enforce: true,
+    };
+  }
+
+  function sanitizeExplanation(text) {
+    var raw = String(text || "");
+    var cleaned = raw;
+    var noiseDetected = false;
+
+    EXPLANATION_NOISE_PATTERNS.forEach(function (pattern) {
+      var next = cleaned.replace(pattern, " ");
+      if (next !== cleaned) {
+        noiseDetected = true;
+        cleaned = next;
+      }
+    });
+
+    cleaned = cleaned
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    var changed = cleaned !== raw.trim() || noiseDetected;
+
+    if (!cleaned && raw.trim()) {
+      cleaned = "Пояснение приведено в нейтральной формулировке по тренировочному банку.";
+      changed = true;
+      noiseDetected = true;
+    }
+
+    return {
+      text: cleaned,
+      changed: changed,
+      noiseDetected: noiseDetected,
+    };
+  }
+
+  function normalizeQuestion(question) {
+    if (!question || typeof question !== "object") return null;
+
+    var out = JSON.parse(JSON.stringify(question));
+
+    if (!out.source) {
+      out.source = "training";
+    }
+
+    if (!Array.isArray(out.tags)) {
+      out.tags = [];
+    }
+
+    if (!Array.isArray(out.whyWrongOptions)) {
+      out.whyWrongOptions = [];
+    }
+
+    var shortSanitized = sanitizeExplanation(out.explanationShort);
+    var longSanitized = sanitizeExplanation(out.explanationLong);
+    out.explanationShort = shortSanitized.text;
+    out.explanationLong = longSanitized.text;
+
+    var mediaSource = null;
+
+    if (out.media && typeof out.media === "object") {
+      mediaSource = out.media;
+    } else if (typeof out.image === "string" || typeof out.imageSrc === "string") {
+      mediaSource = {
+        type: "image",
+        src: out.imageSrc || out.image,
+        alt: out.imageAlt || "",
+      };
+    } else if (out.figure && typeof out.figure === "object") {
+      mediaSource = {
+        type: out.figure.type || "image",
+        src: out.figure.src || out.figure.imageSrc || "",
+        alt: out.figure.alt || "",
+      };
+    }
+
+    if (mediaSource) {
+      var mediaType = String(mediaSource.type || "image").trim().toLowerCase();
+      var mediaSrc = normalizeMediaSrc(mediaSource.src || mediaSource.imageSrc || "");
+      var mediaAlt = String(mediaSource.alt || out.imageAlt || "").trim();
+      if (!mediaAlt) {
+        mediaAlt = String(out.prompt || "Иллюстрация к вопросу").trim();
+      }
+
+      out.media = {
+        type: mediaType,
+        src: mediaSrc,
+        alt: mediaAlt,
+      };
+    } else {
+      out.media = null;
+    }
+
+    out._normalization = {
+      explanationChanged: shortSanitized.changed || longSanitized.changed,
+      explanationNoiseDetected: shortSanitized.noiseDetected || longSanitized.noiseDetected,
+    };
+
+    return out;
+  }
+
+  function questionNeedsImage(question) {
+    var text = [question.prompt, question.explanationShort, question.explanationLong].join(" ");
+    return IMAGE_REQUIRED_PATTERNS.some(function (pattern) {
+      return pattern.test(text);
+    });
+  }
+
+  function validateMedia(media, mediaLookup) {
+    if (!media) {
+      return {
+        exists: false,
+        valid: false,
+        reasons: ["media-missing"],
+      };
+    }
+
+    var reasons = [];
+    if (media.type !== "image") {
+      reasons.push("media-invalid-type");
+    }
+    if (!String(media.src || "").trim()) {
+      reasons.push("media-empty-src");
+    }
+    if (!String(media.alt || "").trim()) {
+      reasons.push("media-empty-alt");
+    }
+
+    if (mediaLookup && mediaLookup.enforce && String(media.src || "").trim()) {
+      var key = normalizeMediaSrc(media.src);
+      if (!mediaLookup.lookup[key]) {
+        reasons.push("media-src-not-found");
+      }
+    }
+
+    return {
+      exists: true,
+      valid: reasons.length === 0,
+      reasons: reasons,
+    };
+  }
+
+  function prepareQuestionBank(questions, options) {
+    var opts = options || {};
     var errors = [];
     var warnings = [];
+    var idSet = {};
+    var promptSet = {};
     var required = [
       "id",
       "section",
@@ -55,29 +250,52 @@
       "tags",
     ];
 
-    var idSet = {};
-    var promptSet = {};
+    var mediaLookup = makeMediaLookup(opts.mediaManifest);
 
-    questions.forEach(function (question, index) {
+    var normalizedQuestions = [];
+    var activeQuestions = [];
+    var excludedQuestionIds = [];
+    var missingMediaRequiredIds = [];
+    var brokenMediaSrcIds = [];
+    var noisyExplanationIds = [];
+    var normalizedExplanationIds = [];
+
+    questions.forEach(function (rawQuestion, index) {
+      var question = normalizeQuestion(rawQuestion);
+      if (!question) {
+        errors.push("Question #" + index + " invalid object");
+        return;
+      }
+
+      normalizedQuestions.push(question);
+
+      var questionErrors = [];
+      var normalizedPrompt = normalizePrompt(question.prompt);
+
       required.forEach(function (field) {
         if (question[field] === undefined || question[field] === null || question[field] === "") {
-          errors.push("Question #" + index + " missing field: " + field);
+          questionErrors.push("Question #" + index + " missing field: " + field);
         }
       });
 
-      if (idSet[question.id]) {
-        errors.push("Duplicate id: " + question.id);
+      if (!question.id) {
+        questionErrors.push("Question #" + index + " missing id");
+      } else if (idSet[question.id]) {
+        questionErrors.push("Duplicate id: " + question.id);
+      } else {
+        idSet[question.id] = true;
       }
-      idSet[question.id] = true;
 
-      var normalizedPrompt = String(question.prompt || "").trim().toLowerCase();
-      if (promptSet[normalizedPrompt]) {
-        errors.push("Duplicate prompt: " + question.prompt);
+      if (!normalizedPrompt) {
+        questionErrors.push("Question " + (question.id || "#" + index) + " has empty prompt");
+      } else if (promptSet[normalizedPrompt]) {
+        questionErrors.push("Duplicate prompt: " + question.prompt);
+      } else {
+        promptSet[normalizedPrompt] = true;
       }
-      promptSet[normalizedPrompt] = true;
 
       if (!Array.isArray(question.options) || question.options.length < 2) {
-        errors.push("Question " + question.id + " must have at least 2 options");
+        questionErrors.push("Question " + (question.id || "#" + index) + " must have at least 2 options");
       }
 
       if (
@@ -85,42 +303,122 @@
         question.correctIndex < 0 ||
         question.correctIndex >= (Array.isArray(question.options) ? question.options.length : 0)
       ) {
-        errors.push("Question " + question.id + " has invalid correctIndex");
+        questionErrors.push("Question " + (question.id || "#" + index) + " has invalid correctIndex");
       }
 
       if (!Array.isArray(question.whyWrongOptions) || question.whyWrongOptions.length < 1) {
-        errors.push("Question " + question.id + " must have whyWrongOptions explanations");
+        questionErrors.push("Question " + (question.id || "#" + index) + " must have whyWrongOptions explanations");
       }
 
       if (!String(question.explanationShort || "").trim() || !String(question.explanationLong || "").trim()) {
-        errors.push("Question " + question.id + " has empty explanation fields");
+        questionErrors.push("Question " + (question.id || "#" + index) + " has empty explanation fields");
       }
 
       if (question.section !== "type" && question.section !== "area") {
-        errors.push("Question " + question.id + " has invalid section");
+        questionErrors.push("Question " + (question.id || "#" + index) + " has invalid section");
       }
 
       if (question.section === "type" && !question.vesselType) {
-        errors.push("Question " + question.id + " missing vesselType for type section");
+        questionErrors.push("Question " + (question.id || "#" + index) + " missing vesselType for type section");
       }
 
       if (question.section === "area" && !question.area) {
-        errors.push("Question " + question.id + " missing area for area section");
+        questionErrors.push("Question " + (question.id || "#" + index) + " missing area for area section");
       }
 
-      if (!question.source) {
-        warnings.push("Question " + question.id + " has no source mark, defaulting to training.");
+      if (!rawQuestion.source) {
+        warnings.push("Question " + (question.id || "#" + index) + " has no source mark, defaulted to training.");
       }
+
+      if (question._normalization && question._normalization.explanationNoiseDetected) {
+        noisyExplanationIds.push(question.id);
+        warnings.push("Question " + question.id + " explanation normalized: removed UI-dependent phrases.");
+      }
+
+      if (question._normalization && question._normalization.explanationChanged) {
+        normalizedExplanationIds.push(question.id);
+      }
+
+      var needsImage = questionNeedsImage(question);
+      var mediaCheck = validateMedia(question.media, mediaLookup);
+
+      if (mediaCheck.exists && !mediaCheck.valid) {
+        if (mediaCheck.reasons.indexOf("media-src-not-found") >= 0 || mediaCheck.reasons.indexOf("media-empty-src") >= 0) {
+          brokenMediaSrcIds.push(question.id);
+        }
+        warnings.push(
+          "Question " +
+            question.id +
+            " has invalid media: " +
+            mediaCheck.reasons.join(", ")
+        );
+      }
+
+      if (needsImage && !mediaCheck.valid) {
+        missingMediaRequiredIds.push(question.id);
+        questionErrors.push("Question " + question.id + " requires image but has no usable media.");
+      }
+
+      if (!needsImage && mediaCheck.exists && !mediaCheck.valid) {
+        question.media = null;
+      }
+
+      if (questionErrors.length > 0) {
+        errors = errors.concat(questionErrors);
+        excludedQuestionIds.push(question.id || "#" + index);
+      } else {
+        activeQuestions.push(question);
+      }
+
+      delete question._normalization;
     });
 
+    excludedQuestionIds = uniqueBy(excludedQuestionIds, function (id) {
+      return id;
+    });
+    missingMediaRequiredIds = uniqueBy(missingMediaRequiredIds, function (id) {
+      return id;
+    });
+    brokenMediaSrcIds = uniqueBy(brokenMediaSrcIds, function (id) {
+      return id;
+    });
+    noisyExplanationIds = uniqueBy(noisyExplanationIds, function (id) {
+      return id;
+    });
+    normalizedExplanationIds = uniqueBy(normalizedExplanationIds, function (id) {
+      return id;
+    });
+
+    var summary = {
+      total: normalizedQuestions.length,
+      valid: activeQuestions.length,
+      missingMediaRequired: missingMediaRequiredIds.length,
+      brokenMediaSrc: brokenMediaSrcIds.length,
+      noisyExplanations: noisyExplanationIds.length,
+      normalizedExplanations: normalizedExplanationIds.length,
+      excluded: excludedQuestionIds.length,
+      active: activeQuestions.length,
+    };
+
     return {
-      ok: errors.length === 0,
-      errors: errors,
-      warnings: warnings,
-      summary: {
-        total: questions.length,
+      questions: normalizedQuestions,
+      activeQuestions: activeQuestions,
+      excludedQuestionIds: excludedQuestionIds,
+      missingMediaRequiredIds: missingMediaRequiredIds,
+      brokenMediaSrcIds: brokenMediaSrcIds,
+      noisyExplanationIds: noisyExplanationIds,
+      normalizedExplanationIds: normalizedExplanationIds,
+      validation: {
+        ok: errors.length === 0,
+        errors: errors,
+        warnings: warnings,
+        summary: summary,
       },
     };
+  }
+
+  function validateQuestionBank(questions, options) {
+    return prepareQuestionBank(questions, options).validation;
   }
 
   function createInitialQuestionStat(question) {
@@ -235,7 +533,7 @@
   function questionPriority(question, stats, recentIds, randomShift) {
     var qStat = stats.questionStats[question.id] || null;
     var mastery = qStat && typeof qStat.masteryScore === "number" ? qStat.masteryScore : 0;
-    var recentPenalty = recentIds.indexOf(question.id) >= 0 ? -0.25 : 0;
+    var recentPenalty = recentIds.indexOf(question.id) >= 0 ? -0.6 : 0;
     var generalPenalty = question.vesselType === "any" || question.area === "any" ? -0.12 : 0;
     return (1 - mastery) + recentPenalty + generalPenalty + randomShift;
   }
@@ -247,7 +545,7 @@
       .map(function (question) {
         return {
           q: question,
-          score: questionPriority(question, stats, recentIds, Math.random() * 0.3),
+          score: questionPriority(question, stats, recentIds, Math.random() * 0.55),
         };
       })
       .sort(function (a, b) {
@@ -281,8 +579,30 @@
       });
     }
 
-    return selected.slice(0, count);
+    return shuffle(selected.slice(0, count));
   }
+
+  function avoidRecentWhenPossible(pool, recentIds, desiredCount) {
+  var fresh = pool.filter(function (q) {
+    return recentIds.indexOf(q.id) < 0;
+  });
+
+  if (fresh.length >= desiredCount) {
+    return fresh;
+  }
+
+  var minFresh = Math.max(3, Math.floor(desiredCount * 0.6));
+  if (fresh.length >= minFresh) {
+    var stale = shuffle(
+      pool.filter(function (q) {
+        return recentIds.indexOf(q.id) >= 0;
+      })
+    );
+    return fresh.concat(stale);
+  }
+
+  return pool;
+}
 
   function calculateScenarioCount(config, scenario) {
     if (scenario === "type-ticket") return config.ticketSize.typeTicket;
@@ -320,121 +640,235 @@
     });
   }
 
-  function generateTicket(options) {
-    var questions = options.questions;
-    var stats = options.stats;
-    var config = options.config;
-    var scenario = options.scenario;
-    var vesselType = options.vesselType;
-    var area = options.area;
+function getScenarioAvailability(options) {
+  var questions = options.questions || [];
+  var stats = options.stats || { questionStats: {} };
+  var config = options.config;
+  var scenario = options.scenario;
+  var vesselType = options.vesselType;
+  var area = options.area;
 
-    var contextKey = buildContextKey(options);
-    var recentSignatures = getRecentSignatures(stats, contextKey);
-    var recentQuestionIds = collectRecentQuestionIds(stats, config.adaptation.recentQuestionWindow);
+  if (scenario === "mistakes") {
+    var requested = Number(options.mistakesCount) || config.ticketSize.mistakesDefault;
+    var mistakesPool = buildMistakesPool(questions, stats, config, vesselType, area);
+    return {
+      scenario: scenario,
+      requiredCount: requested,
+      availableCount: mistakesPool.length,
+      hasAny: mistakesPool.length > 0,
+      hasEnough: mistakesPool.length >= requested,
+      details: {
+        mistakesPool: mistakesPool.length,
+      },
+    };
+  }
 
-    var warningBag = [];
-    var candidate = [];
+  if (scenario === "full") {
+    var split = splitFullPools(questions, vesselType, area);
+    var typeNeed = config.ticketSize.fullType;
+    var areaNeed = config.ticketSize.fullArea;
+    var available = Math.min(typeNeed, split.typePool.length) + Math.min(areaNeed, split.areaPool.length);
+    return {
+      scenario: scenario,
+      requiredCount: typeNeed + areaNeed,
+      availableCount: available,
+      hasAny: available > 0,
+      hasEnough: split.typePool.length >= typeNeed && split.areaPool.length >= areaNeed,
+      details: {
+        typeRequired: typeNeed,
+        typeAvailable: split.typePool.length,
+        areaRequired: areaNeed,
+        areaAvailable: split.areaPool.length,
+      },
+    };
+  }
 
-    if (scenario === "mistakes") {
-      var mistakesPool = buildMistakesPool(questions, stats, config, vesselType, area);
-      var requested = Number(options.mistakesCount) || config.ticketSize.mistakesDefault;
-      if (mistakesPool.length === 0) {
-        return {
-          ok: false,
-          reason: "no-mistakes",
-          questions: [],
-          availableCount: 0,
-        };
-      }
-      if (mistakesPool.length < requested) {
-        warningBag.push("Недостаточно вопросов с ошибками для выбранной длины.");
-      }
-      candidate = pickBalanced(mistakesPool, Math.min(requested, mistakesPool.length), stats, recentQuestionIds);
-      return {
-        ok: candidate.length > 0,
-        reason: candidate.length > 0 ? null : "no-mistakes",
-        questions: candidate,
-        warnings: warningBag,
-        contextKey: contextKey,
-      };
-    }
+  var requiredCount = calculateScenarioCount(config, scenario);
+  var pool = buildBasePool(questions, scenario, vesselType, area);
+  return {
+    scenario: scenario,
+    requiredCount: requiredCount,
+    availableCount: pool.length,
+    hasAny: pool.length > 0,
+    hasEnough: pool.length >= requiredCount,
+    details: {},
+  };
+}
 
-    var targetCount = calculateScenarioCount(config, scenario);
+function generateTicket(options) {
+  var questions = options.questions;
+  var stats = options.stats;
+  var config = options.config;
+  var scenario = options.scenario;
+  var vesselType = options.vesselType;
+  var area = options.area;
+  var allowShortTicket = Boolean(options.allowShortTicket);
 
-    if (scenario === "full") {
-      var split = splitFullPools(questions, vesselType, area);
-      var typeNeed = config.ticketSize.fullType;
-      var areaNeed = config.ticketSize.fullArea;
+  var contextKey = buildContextKey(options);
+  var recentSignatures = getRecentSignatures(stats, contextKey);
+  var recentQuestionIds = collectRecentQuestionIds(stats, config.adaptation.recentQuestionWindow);
 
-      if (split.typePool.length < typeNeed) {
-        warningBag.push("Мало вопросов по типу судна: вариативность ограничена.");
-      }
-      if (split.areaPool.length < areaNeed) {
-        warningBag.push("Мало вопросов по району плавания: вариативность ограничена.");
-      }
+  var warningBag = [];
+  var candidate = [];
 
-      var typePart = pickBalanced(split.typePool, Math.min(typeNeed, split.typePool.length), stats, recentQuestionIds);
-      var areaPart = pickBalanced(split.areaPool, Math.min(areaNeed, split.areaPool.length), stats, recentQuestionIds);
-      candidate = uniqueBy(typePart.concat(areaPart), function (q) {
-        return q.id;
-      });
-    } else {
-      var pool = buildBasePool(questions, scenario, vesselType, area);
-      if (pool.length < targetCount) {
-        warningBag.push("Банк вопросов мал для выбранного сценария: вариативность ограничена.");
-      }
-      candidate = pickBalanced(pool, Math.min(targetCount, pool.length), stats, recentQuestionIds);
-    }
+  if (scenario === "mistakes") {
+    var mistakesPool = buildMistakesPool(questions, stats, config, vesselType, area);
+    var requested = Number(options.mistakesCount) || config.ticketSize.mistakesDefault;
+    mistakesPool = avoidRecentWhenPossible(mistakesPool, recentQuestionIds, requested);
 
-    if (candidate.length === 0) {
+    if (mistakesPool.length === 0) {
       return {
         ok: false,
-        reason: "pool-empty",
+        reason: "no-mistakes",
         questions: [],
-        warnings: warningBag,
+        requiredCount: requested,
+        availableCount: 0,
       };
     }
 
-    var selected = candidate;
-    var selectedSignature = questionSignature(
-      selected.map(function (q) {
-        return q.id;
-      })
-    );
-
-    if (recentSignatures.indexOf(selectedSignature) >= 0) {
-      var improved = null;
-      var attempts = 0;
-      while (attempts < config.adaptation.maxTicketGenerationAttempts) {
-        attempts += 1;
-        var alt = shuffle(candidate).slice(0, candidate.length);
-        var altSig = questionSignature(
-          alt.map(function (q) {
-            return q.id;
-          })
-        );
-        if (recentSignatures.indexOf(altSig) < 0) {
-          improved = alt;
-          selectedSignature = altSig;
-          break;
-        }
-      }
-      if (improved) {
-        selected = improved;
-      } else {
-        warningBag.push("Не удалось собрать полностью новый набор: банк ограничен.");
-      }
+    if (mistakesPool.length < requested && !allowShortTicket) {
+      return {
+        ok: false,
+        reason: "insufficient-pool",
+        questions: [],
+        requiredCount: requested,
+        availableCount: mistakesPool.length,
+        shortage: true,
+      };
     }
 
+    if (mistakesPool.length < requested) {
+      warningBag.push(
+        "Для работы над ошибками доступно только " + mistakesPool.length + " валидных вопросов из " + requested + "."
+      );
+    }
+
+    candidate = pickBalanced(mistakesPool, Math.min(requested, mistakesPool.length), stats, recentQuestionIds);
     return {
-      ok: true,
-      reason: null,
-      questions: selected,
+      ok: candidate.length > 0,
+      reason: candidate.length > 0 ? null : "no-mistakes",
+      questions: candidate,
+      requiredCount: requested,
+      availableCount: mistakesPool.length,
+      warnings: warningBag,
       contextKey: contextKey,
-      signature: selectedSignature,
+    };
+  }
+
+  var availability = getScenarioAvailability({
+    questions: questions,
+    stats: stats,
+    config: config,
+    scenario: scenario,
+    vesselType: vesselType,
+    area: area,
+  });
+
+  if (!availability.hasAny) {
+    return {
+      ok: false,
+      reason: "pool-empty",
+      questions: [],
+      requiredCount: availability.requiredCount,
+      availableCount: availability.availableCount,
+    };
+  }
+
+  if (!availability.hasEnough && !allowShortTicket) {
+    return {
+      ok: false,
+      reason: "insufficient-pool",
+      questions: [],
+      requiredCount: availability.requiredCount,
+      availableCount: availability.availableCount,
+      details: availability.details,
+      shortage: true,
+    };
+  }
+
+  if (scenario === "full") {
+    var split = splitFullPools(questions, vesselType, area);
+    var typeNeed = config.ticketSize.fullType;
+    var areaNeed = config.ticketSize.fullArea;
+
+    split.typePool = avoidRecentWhenPossible(split.typePool, recentQuestionIds, typeNeed);
+    split.areaPool = avoidRecentWhenPossible(split.areaPool, recentQuestionIds, areaNeed);
+
+    if (split.typePool.length < typeNeed) {
+      warningBag.push("Недостаточно вопросов по типу судна: доступно " + split.typePool.length + " из " + typeNeed + ".");
+    }
+    if (split.areaPool.length < areaNeed) {
+      warningBag.push("Недостаточно вопросов по району плавания: доступно " + split.areaPool.length + " из " + areaNeed + ".");
+    }
+
+    var typePart = pickBalanced(split.typePool, Math.min(typeNeed, split.typePool.length), stats, recentQuestionIds);
+    var areaPart = pickBalanced(split.areaPool, Math.min(areaNeed, split.areaPool.length), stats, recentQuestionIds);
+    candidate = uniqueBy(typePart.concat(areaPart), function (q) {
+      return q.id;
+    });
+  } else {
+    var targetCount = calculateScenarioCount(config, scenario);
+    var pool = buildBasePool(questions, scenario, vesselType, area);
+    pool = avoidRecentWhenPossible(pool, recentQuestionIds, targetCount);
+    if (pool.length < targetCount) {
+      warningBag.push("Для сценария доступно " + pool.length + " валидных вопросов из " + targetCount + ".");
+    }
+    candidate = pickBalanced(pool, Math.min(targetCount, pool.length), stats, recentQuestionIds);
+  }
+
+  if (candidate.length === 0) {
+    return {
+      ok: false,
+      reason: "pool-empty",
+      questions: [],
+      requiredCount: availability.requiredCount,
+      availableCount: availability.availableCount,
       warnings: warningBag,
     };
   }
+
+  var selected = candidate;
+  var selectedSignature = questionSignature(
+    selected.map(function (q) {
+      return q.id;
+    })
+  );
+
+  if (recentSignatures.indexOf(selectedSignature) >= 0) {
+    var improved = null;
+    var attempts = 0;
+    while (attempts < config.adaptation.maxTicketGenerationAttempts) {
+      attempts += 1;
+      var alt = shuffle(candidate).slice(0, candidate.length);
+      var altSig = questionSignature(
+        alt.map(function (q) {
+          return q.id;
+        })
+      );
+      if (recentSignatures.indexOf(altSig) < 0) {
+        improved = alt;
+        selectedSignature = altSig;
+        break;
+      }
+    }
+    if (improved) {
+      selected = improved;
+    } else {
+      warningBag.push("Не удалось собрать полностью новый набор: банк ограничен.");
+    }
+  }
+
+  return {
+    ok: true,
+    reason: null,
+    questions: selected,
+    requiredCount: availability.requiredCount,
+    availableCount: availability.availableCount,
+    contextKey: contextKey,
+    signature: selectedSignature,
+    warnings: warningBag,
+  };
+}
 
   function registerTicket(stats, contextKey, signature, config) {
     saveRecentSignature(stats, contextKey, signature, config.adaptation.recentTicketWindow);
@@ -517,6 +951,8 @@
 
   global.ExamCore = {
     validateQuestionBank: validateQuestionBank,
+    prepareQuestionBank: prepareQuestionBank,
+    questionNeedsImage: questionNeedsImage,
     registerAnswer: registerAnswer,
     computeMastery: computeMastery,
     generateTicket: generateTicket,
@@ -524,6 +960,7 @@
     pickWeakAndStrongTopics: pickWeakAndStrongTopics,
     getTopProblemQuestions: getTopProblemQuestions,
     buildContextKey: buildContextKey,
+    getScenarioAvailability: getScenarioAvailability,
     shuffle: shuffle,
   };
 })(window);

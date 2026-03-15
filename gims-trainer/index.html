@@ -30,7 +30,8 @@
             <h3>Шаг 1. Обучение</h3>
             <p id="learningStatusText">Материалы не завершены.</p>
             <button id="startLearningBtn" class="primary-btn">Открыть обучение</button>
-            <button id="quickMotorStartBtn" class="ghost-btn">Готовлюсь на моторную лодку</button>
+            <button id="quickMotorStartBtn" class="ghost-btn">Подставить настройки для моторной лодки</button>
+            <p id="quickPresetStatus" class="setup-note hidden"></p>
           </article>
 
           <article class="plan-card">
@@ -77,8 +78,8 @@
               <select id="mistakesCountSelect"></select>
             </label>
 
-            <button id="startExamBtn" class="primary-btn" disabled>Начать</button>
-            <p id="examLockText" class="setup-note">Сначала завершите обучение.</p>
+            <button id="startExamBtn" class="primary-btn">Начать</button>
+            <p id="examLockText" class="setup-note">Сессия доступна сразу после выбора параметров.</p>
             <p id="mistakesHintText" class="setup-note hidden"></p>
 
             <div class="actions-row compact-row">
@@ -195,6 +196,10 @@
         <article class="question-card">
           <p id="questionTopic" class="question-topic"></p>
           <h3 id="questionPrompt"></h3>
+          <div id="questionMediaWrap" class="question-media-wrap hidden">
+            <img id="questionMediaImage" src="" alt="" class="question-media-image" />
+            <div id="questionMediaFallback" class="image-fallback hidden">Изображение к вопросу не найдено</div>
+          </div>
           <div id="optionsBox" class="options-box"></div>
         </article>
 
@@ -246,6 +251,8 @@
     <script src="data/modules.js"></script>
     <script src="data/questions.js"></script>
     <script src="data/questions-gims-exams.js"></script>
+    <script src="data/question-media-manifest.js"></script>
+    <script src="data/question-media-map.js"></script>
     <script src="core/storage.js"></script>
     <script src="core/exam.js"></script>
     <script src="ui/render.js"></script>

@@ -29,6 +29,13 @@
       explanationShort: def.explanationShort,
       explanationLong: def.explanationLong,
       whyWrongOptions: wrongEntries,
+      media: def.media
+        ? {
+            type: def.media.type || "image",
+            src: def.media.src || "",
+            alt: def.media.alt || def.prompt,
+          }
+        : null,
       tags: def.tags || [],
     };
   }

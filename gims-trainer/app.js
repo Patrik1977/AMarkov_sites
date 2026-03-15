@@ -10,6 +10,35 @@
       .replace(/\s+/g, " ");
   }
 
+function applyQuestionMediaMap(list, mediaMap) {
+  if (!mediaMap || typeof mediaMap !== "object") {
+    return list.slice();
+  }
+
+  return list.map(function (question) {
+    if (!question || typeof question !== "object") {
+      return question;
+    }
+
+    if (question.media && question.media.type === "image" && String(question.media.src || "").trim()) {
+      return question;
+    }
+
+    var mapped = mediaMap[question.id];
+    if (!mapped || typeof mapped !== "object") {
+      return question;
+    }
+
+    var cloned = JSON.parse(JSON.stringify(question));
+    cloned.media = {
+      type: mapped.type || "image",
+      src: mapped.src || "",
+      alt: mapped.alt || question.prompt || "Иллюстрация к вопросу",
+    };
+    return cloned;
+  });
+}
+
   function mergeQuestionBanks(training, official) {
     var seenById = {};
     var seenByPrompt = {};
@@ -49,7 +78,12 @@
   }
 
   var bankMerge = mergeQuestionBanks(trainingQuestions, officialQuestions);
-  var questions = bankMerge.questions;
+  var questionMediaManifest = Array.isArray(global.QuestionMediaManifest) ? global.QuestionMediaManifest : [];
+  var questionMediaMap = global.QuestionMediaMap && typeof global.QuestionMediaMap === "object" ? global.QuestionMediaMap : {};
+  var bankPrepared = null;
+  var mergedQuestionsWithMedia = applyQuestionMediaMap(bankMerge.questions, questionMediaMap);
+  var allQuestions = mergedQuestionsWithMedia;
+  var questions = mergedQuestionsWithMedia;
   var Storage = global.Storage;
   var ExamCore = global.ExamCore;
   var UI = global.UIRender;
@@ -57,6 +91,12 @@
   if (!config || !Storage || !ExamCore || !UI) {
     return;
   }
+
+  bankPrepared = ExamCore.prepareQuestionBank(mergedQuestionsWithMedia, {
+    mediaManifest: questionMediaManifest,
+  });
+  allQuestions = bankPrepared.questions;
+  questions = bankPrepared.activeQuestions;
 
   var vesselOptions = [
     { value: "motor", label: "Маломерное моторное судно" },
@@ -85,6 +125,7 @@
     learningStatusText: document.getElementById("learningStatusText"),
     examLockText: document.getElementById("examLockText"),
     mistakesHintText: document.getElementById("mistakesHintText"),
+    quickPresetStatus: document.getElementById("quickPresetStatus"),
 
     startLearningBtn: document.getElementById("startLearningBtn"),
     quickMotorStartBtn: document.getElementById("quickMotorStartBtn"),
@@ -135,6 +176,9 @@
     examProgressBar: document.getElementById("examProgressBar"),
     questionTopic: document.getElementById("questionTopic"),
     questionPrompt: document.getElementById("questionPrompt"),
+    questionMediaWrap: document.getElementById("questionMediaWrap"),
+    questionMediaImage: document.getElementById("questionMediaImage"),
+    questionMediaFallback: document.getElementById("questionMediaFallback"),
     optionsBox: document.getElementById("optionsBox"),
     feedbackBox: document.getElementById("feedbackBox"),
     submitOrNextBtn: document.getElementById("submitOrNextBtn"),
@@ -160,7 +204,9 @@
     currentModuleIndex: 0,
     quizByModule: {},
     session: null,
-    validation: ExamCore.validateQuestionBank(questions),
+    validation: bankPrepared.validation,
+    bankDiagnostics: bankPrepared,
+    setupNotice: "",
     view: "setup",
   };
 
@@ -204,6 +250,8 @@
       els.areaSelect.value = "inland-waters";
       els.examScenarioSelect.value = "full";
       els.sessionModeSelect.value = "training";
+      updateMistakesCountVisibility();
+      state.setupNotice = "Применены рекомендованные параметры: моторное судно, внутренние воды, полный комплект, режим тренировки.";
       renderSetup();
     });
 
@@ -232,13 +280,26 @@
     });
 
     els.examScenarioSelect.addEventListener("change", function () {
+      state.setupNotice = "";
       updateMistakesCountVisibility();
       renderSetup();
     });
-    els.sessionModeSelect.addEventListener("change", renderSetup);
-    els.vesselTypeSelect.addEventListener("change", renderSetup);
-    els.areaSelect.addEventListener("change", renderSetup);
-    els.mistakesCountSelect.addEventListener("change", renderSetup);
+    els.sessionModeSelect.addEventListener("change", function () {
+      state.setupNotice = "";
+      renderSetup();
+    });
+    els.vesselTypeSelect.addEventListener("change", function () {
+      state.setupNotice = "";
+      renderSetup();
+    });
+    els.areaSelect.addEventListener("change", function () {
+      state.setupNotice = "";
+      renderSetup();
+    });
+    els.mistakesCountSelect.addEventListener("change", function () {
+      state.setupNotice = "";
+      renderSetup();
+    });
 
     els.startExamBtn.addEventListener("click", startSession);
     els.restartExamBtn.addEventListener("click", startSession);
@@ -448,38 +509,61 @@
     var scenario = els.examScenarioSelect.value;
     var vesselType = els.vesselTypeSelect.value;
     var area = els.areaSelect.value;
+    var mistakesCount = Number(els.mistakesCountSelect.value) || config.ticketSize.mistakesDefault;
 
-    var mistakesAvailable = countMistakeQuestions(vesselType, area);
-    var hasMistakeTicket = scenario !== "mistakes" || mistakesAvailable > 0;
-    var canStart = allModulesPassed() && hasMistakeTicket;
+    var availability = ExamCore.getScenarioAvailability({
+      questions: questions,
+      stats: state.stats,
+      config: config,
+      scenario: scenario,
+      vesselType: vesselType,
+      area: area,
+      mistakesCount: mistakesCount,
+    });
+
+    var mistakesAvailable =
+      scenario === "mistakes" ? availability.availableCount : countMistakeQuestions(vesselType, area);
+    var canStart = availability.hasAny;
 
     var history = buildHistoryViewData();
     var topicSummary = ExamCore.pickWeakAndStrongTopics(state.stats);
     var topProblems = ExamCore.getTopProblemQuestions(
       state.stats,
-      questions,
+      allQuestions,
       config.limits.maxTopProblemQuestions
     );
 
-    var validationLines = state.validation.errors.slice();
-    if (state.validation.warnings.length) {
-      validationLines = validationLines.concat(
-        state.validation.warnings.slice(0, 5).map(function (line) {
-          return "[warn] " + line;
-        })
-      );
-    }
-    validationLines.unshift(
+    var summary = state.validation.summary || {};
+    var validationLines = [];
+
+    validationLines.push(
       "Банк: тренировочных " +
         trainingQuestions.length +
         ", официальных " +
         officialQuestions.length +
         ", после дедупликации " +
-        questions.length +
+        allQuestions.length +
         "."
     );
+    validationLines.push(
+      "После диагностики: валидных " +
+        (summary.valid || 0) +
+        ", исключено " +
+        (summary.excluded || 0) +
+        "."
+    );
+    validationLines.push("Требуют рисунок без media: " + (summary.missingMediaRequired || 0) + ".");
+    validationLines.push("С битым media.src: " + (summary.brokenMediaSrc || 0) + ".");
+    validationLines.push("Нормализовано explanation: " + (summary.normalizedExplanations || 0) + ".");
+
+    if (state.bankDiagnostics.excludedQuestionIds.length) {
+      validationLines.push(
+        "Примеры исключенных id: " + state.bankDiagnostics.excludedQuestionIds.slice(0, 10).join(", ") + "."
+      );
+    }
+
     if (bankMerge.dropped.duplicatePrompt || bankMerge.dropped.duplicateId) {
-      validationLines.unshift(
+      validationLines.push(
         "Удалено дублей: prompt=" +
           bankMerge.dropped.duplicatePrompt +
           ", id=" +
@@ -487,19 +571,64 @@
           "."
       );
     }
+
     if (officialQuestions.length === 0) {
-      validationLines.unshift("Официальный банк не подключен: используется только тренировочный набор.");
+      validationLines.push("Официальный банк не подключен: используется только тренировочный набор.");
+    }
+
+    if (state.validation.errors.length) {
+      validationLines = validationLines.concat(
+        state.validation.errors.slice(0, 8).map(function (line) {
+          return "[error] " + line;
+        })
+      );
+    }
+
+    if (state.validation.warnings.length) {
+      validationLines = validationLines.concat(
+        state.validation.warnings.slice(0, 8).map(function (line) {
+          return "[warn] " + line;
+        })
+      );
+    }
+
+    var examLockText = "Сессия доступна.";
+    if (!availability.hasAny) {
+      examLockText =
+        scenario === "mistakes"
+          ? "По выбранным параметрам пока нет вопросов с ошибками."
+          : "Для выбранных параметров нет валидных вопросов в банке.";
+    } else if (!availability.hasEnough) {
+      if (scenario === "full" && availability.details) {
+        examLockText =
+          "Для полного билета доступно " +
+          availability.availableCount +
+          " из " +
+          availability.requiredCount +
+          " (тип: " +
+          availability.details.typeAvailable +
+          "/" +
+          availability.details.typeRequired +
+          ", район: " +
+          availability.details.areaAvailable +
+          "/" +
+          availability.details.areaRequired +
+          "). Можно запустить сокращенный билет после подтверждения.";
+      } else {
+        examLockText =
+          "Для выбранного режима доступно только " +
+          availability.availableCount +
+          " валидных вопросов из необходимых " +
+          availability.requiredCount +
+          ". Можно запустить сокращенный билет после подтверждения.";
+      }
     }
 
     UI.renderSetup(els, {
       learningText: allModulesPassed()
-        ? "Обучение завершено: можно запускать сессии."
-        : "Обучение не завершено. Для каждого модуля нужен мини-квиз.",
-      examLockText: !allModulesPassed()
-        ? "Сначала завершите мини-проверки по всем модулям."
-        : !hasMistakeTicket
-          ? "По выбранным параметрам пока нет ошибок для отдельного билета."
-          : "Сессия доступна.",
+        ? "Обучение завершено. Можно запускать сессии сразу."
+        : "Обучение опционально: можно начать сессию сразу или пройти модули с мини-квизами.",
+      examLockText: examLockText,
       canStart: canStart,
       moduleProgressText: completedCount + " / " + modules.length + " модулей пройдено",
       moduleProgressPercent: Math.round((completedCount / modules.length) * 100),
@@ -511,6 +640,7 @@
             ? "Доступно вопросов по ошибкам: " + mistakesAvailable + "."
             : "Нет накопленных ошибок для выбранных типа/района."
           : "",
+      quickPresetNote: state.setupNotice,
       history: history,
       topicSummary: topicSummary,
       topProblems: topProblems,
@@ -573,13 +703,6 @@
   }
 
   function startSession() {
-    if (!allModulesPassed()) {
-      renderSetup();
-      UI.showView(els, "setup", config);
-      state.view = "setup";
-      return;
-    }
-
     var scenario = els.examScenarioSelect.value;
     var sessionMode = els.sessionModeSelect.value;
     var vesselType = els.vesselTypeSelect.value;
@@ -597,12 +720,57 @@
       mistakesCount: mistakesCount,
     });
 
+    if (!ticket.ok && ticket.reason === "insufficient-pool") {
+      var confirmText =
+        "Для выбранного режима доступно только " +
+        ticket.availableCount +
+        " валидных вопросов из необходимых " +
+        ticket.requiredCount +
+        ". Запустить сокращенный билет на " +
+        ticket.availableCount +
+        " вопросов?";
+
+      if (!global.confirm(confirmText)) {
+        state.setupNotice =
+          "Старт отменен. Для выбранного сценария доступно " +
+          ticket.availableCount +
+          " из " +
+          ticket.requiredCount +
+          " валидных вопросов.";
+        renderSetup();
+        UI.showView(els, "setup", config);
+        state.view = "setup";
+        return;
+      }
+
+      ticket = ExamCore.generateTicket({
+        questions: questions,
+        stats: state.stats,
+        config: config,
+        scenario: scenario,
+        vesselType: vesselType,
+        area: area,
+        sessionMode: sessionMode,
+        mistakesCount: mistakesCount,
+        allowShortTicket: true,
+      });
+    }
+
     if (!ticket.ok || !ticket.questions.length) {
+      if (ticket.reason === "no-mistakes") {
+        global.alert("По выбранным параметрам нет вопросов для режима работы над ошибками.");
+      } else if (ticket.reason === "pool-empty") {
+        global.alert("Для выбранного режима нет валидных вопросов. Измените параметры сессии.");
+      } else {
+        global.alert("Не удалось сформировать билет. Проверьте параметры и диагностику банка.");
+      }
       renderSetup();
       UI.showView(els, "setup", config);
       state.view = "setup";
       return;
     }
+
+    state.setupNotice = "";
 
     var shuffledQuestions = ticket.questions.map(function (question) {
       return shuffleQuestionOptions(question);

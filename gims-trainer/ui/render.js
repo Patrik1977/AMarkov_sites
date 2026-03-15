@@ -74,6 +74,9 @@
     setHidden(els.mistakesHintText, !payload.mistakesHint);
     els.mistakesHintText.textContent = payload.mistakesHint || "";
 
+    setHidden(els.quickPresetStatus, !payload.quickPresetNote);
+    els.quickPresetStatus.textContent = payload.quickPresetNote || "";
+
     els.historyAttemptsValue.textContent = String(payload.history.attempts);
     els.historyAverageValue.textContent = payload.history.averagePercent + "%";
     els.historyMistakesValue.textContent = String(payload.history.mistakeQuestions);
@@ -241,11 +244,50 @@
     els.learningImage.src = imagePath;
   }
 
+  function renderExamMedia(els, question) {
+    if (!els.questionMediaWrap || !els.questionMediaImage || !els.questionMediaFallback) {
+      return;
+    }
+
+    var media = question && question.media && typeof question.media === "object" ? question.media : null;
+    var hasImage = media && media.type === "image" && String(media.src || "").trim();
+
+    if (!hasImage) {
+      setHidden(els.questionMediaWrap, true);
+      setHidden(els.questionMediaImage, true);
+      setHidden(els.questionMediaFallback, true);
+      els.questionMediaImage.removeAttribute("src");
+      els.questionMediaImage.alt = "";
+      return;
+    }
+
+    setHidden(els.questionMediaWrap, false);
+    setHidden(els.questionMediaImage, false);
+    setHidden(els.questionMediaFallback, true);
+
+    els.questionMediaFallback.textContent = "Изображение к вопросу не найдено";
+    els.questionMediaImage.alt = String(media.alt || "Иллюстрация к вопросу");
+
+    els.questionMediaImage.onerror = function () {
+      setHidden(els.questionMediaImage, true);
+      setHidden(els.questionMediaFallback, false);
+    };
+
+    els.questionMediaImage.onload = function () {
+      setHidden(els.questionMediaImage, false);
+      setHidden(els.questionMediaFallback, true);
+    };
+
+    els.questionMediaImage.src = media.src;
+  }
+
   function renderExamQuestion(els, payload) {
     els.examCounter.textContent = payload.counterText;
     els.examProgressBar.style.width = payload.progressPercent + "%";
     els.questionTopic.textContent = payload.showTopic ? payload.question.topic : "Тема скрыта до завершения экзамена";
     els.questionPrompt.textContent = payload.question.prompt;
+
+    renderExamMedia(els, payload.question);
 
     els.optionsBox.innerHTML = payload.question.options
       .map(function (option, index) {
