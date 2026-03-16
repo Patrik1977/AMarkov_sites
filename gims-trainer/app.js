@@ -39,14 +39,50 @@ function applyQuestionMediaMap(list, mediaMap) {
   });
 }
 
+  function getQuestionImageScore(question) {
+    if (!question || typeof question !== "object") return 0;
+    if (
+      question.media &&
+      question.media.type === "image" &&
+      String(question.media.src || "").trim()
+    ) {
+      return 2;
+    }
+    if (String(question.imageSrc || question.image || "").trim()) {
+      return 1;
+    }
+    return 0;
+  }
+
+  function getQuestionSourcePriority(question) {
+    var source = String((question && question.source) || "");
+    if (!source) return 0;
+    if (source.indexOf("gimsportal.online") >= 0) return 3;
+    if (source.indexOf("archive:gims-exams") >= 0 || source.indexOf("gims-exams") >= 0) return 2;
+    if (source.indexOf("training") >= 0) return 1;
+    return 0;
+  }
+
+  function shouldReplaceDuplicateQuestion(existing, candidate) {
+    var existingImage = getQuestionImageScore(existing);
+    var candidateImage = getQuestionImageScore(candidate);
+    if (candidateImage > existingImage) return true;
+    if (candidateImage < existingImage) return false;
+
+    var existingPriority = getQuestionSourcePriority(existing);
+    var candidatePriority = getQuestionSourcePriority(candidate);
+    return candidatePriority > existingPriority;
+  }
+
   function mergeQuestionBanks(training, official) {
-    var seenById = {};
-    var seenByPrompt = {};
+    var idIndex = {};
+    var promptScopeIndex = {};
     var merged = [];
     var dropped = {
       duplicateId: 0,
       duplicatePrompt: 0,
       invalid: 0,
+      replacedByBetterDuplicate: 0,
     };
 
     [training, official].forEach(function (list) {
@@ -55,19 +91,51 @@ function applyQuestionMediaMap(list, mediaMap) {
           dropped.invalid += 1;
           return;
         }
-        if (seenById[question.id]) {
-          dropped.duplicateId += 1;
-          return;
-        }
-        var promptKey = normalizePrompt(question.prompt);
-        if (promptKey && seenByPrompt[promptKey]) {
-          dropped.duplicatePrompt += 1;
+
+        var questionId = question.id;
+        if (idIndex[questionId] !== undefined) {
+          var byIdIndex = idIndex[questionId];
+          var existingById = merged[byIdIndex];
+          if (shouldReplaceDuplicateQuestion(existingById, question)) {
+            merged[byIdIndex] = question;
+            dropped.replacedByBetterDuplicate += 1;
+          } else {
+            dropped.duplicateId += 1;
+          }
           return;
         }
 
-        seenById[question.id] = true;
-        if (promptKey) seenByPrompt[promptKey] = true;
+        var promptKey = normalizePrompt(question.prompt);
+        var scopeKey = [
+          question.section || "",
+          question.vesselType || "",
+          question.area || "",
+          promptKey,
+        ].join("|");
+
+        if (promptKey && promptScopeIndex[scopeKey] !== undefined) {
+          var byPromptIndex = promptScopeIndex[scopeKey];
+          var existingByPrompt = merged[byPromptIndex];
+
+          if (shouldReplaceDuplicateQuestion(existingByPrompt, question)) {
+            if (existingByPrompt && idIndex[existingByPrompt.id] !== undefined) {
+              delete idIndex[existingByPrompt.id];
+            }
+            merged[byPromptIndex] = question;
+            idIndex[questionId] = byPromptIndex;
+            dropped.replacedByBetterDuplicate += 1;
+          } else {
+            dropped.duplicatePrompt += 1;
+          }
+          return;
+        }
+
+        var nextIndex = merged.length;
         merged.push(question);
+        idIndex[questionId] = nextIndex;
+        if (promptKey) {
+          promptScopeIndex[scopeKey] = nextIndex;
+        }
       });
     });
 
@@ -76,6 +144,7 @@ function applyQuestionMediaMap(list, mediaMap) {
       dropped: dropped,
     };
   }
+
 
   var bankMerge = mergeQuestionBanks(trainingQuestions, officialQuestions);
   var questionMediaManifest = Array.isArray(global.QuestionMediaManifest) ? global.QuestionMediaManifest : [];

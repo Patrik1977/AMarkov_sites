@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-03-16T16:48:45Z",
+  "tests": [
+    {
+      "course_id": 59,
+      "test_id": 129,
+      "total": 466,
+      "processed": 466,
+      "collected": 466,
+      "with_media": 464,
+      "correct_from_message": 340,
+      "correct_from_existing": 117,
+      "correct_fallback_zero": 9,
+      "errors": []
+    },
+    {
+      "course_id": 59,
+      "test_id": 132,
+      "total": 231,
+      "processed": 231,
+      "collected": 231,
+      "with_media": 231,
+      "correct_from_message": 181,
+      "correct_from_existing": 49,
+      "correct_fallback_zero": 1,
+      "errors": []
+    },
+    {
+      "course_id": 59,
+      "test_id": 133,
+      "total": 407,
+      "processed": 407,
+      "collected": 407,
+      "with_media": 405,
+      "correct_from_message": 303,
+      "correct_from_existing": 100,
+      "correct_fallback_zero": 4,
+      "errors": []
+    }
+  ],
+  "totalCollectedRaw": 1104,
+  "totalAfterScopedDedupe": 997,
+  "mediaManifestCount": 1323,
+  "outputFile": "data/questions-gimsportal.js"
+}
