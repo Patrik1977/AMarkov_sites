@@ -10,6 +10,10 @@
     /букв[аы]\s*[A-Za-zА-Яа-я]/i,
     /по\s+данной\s+схеме/i,
   ];
+  var LETTERED_VESSEL_PATTERN = /судн[оуа]\s*[A-Za-zА-Яа-я]/i;
+  var TWO_VESSELS_PROMPT_PATTERN = /какое\s+из\s+(?:двух|этих)\s+(?:маломерн(?:ых|ого)\s+)?суд/i;
+  var GIVE_WAY_PROMPT_PATTERN = /уступить\s+дорог/i;
+  var RELATIVE_MANEUVER_PROMPT_PATTERN = /(разойтись|расхождени|обгон|пересечени(?:и|е)\s+курсов|встречно)/i;
 
   var EXPLANATION_NOISE_PATTERNS = [
     /для\s+успешной\s+сдачи\s+экзамена[^.?!\n]*(?:зелен|зел[её]н)/gi,
@@ -264,9 +268,31 @@
 
   function questionNeedsImage(question) {
     var text = [question.prompt, question.explanationShort, question.explanationLong].join(" ");
-    return IMAGE_REQUIRED_PATTERNS.some(function (pattern) {
-      return pattern.test(text);
-    });
+    if (
+      IMAGE_REQUIRED_PATTERNS.some(function (pattern) {
+        return pattern.test(text);
+      })
+    ) {
+      return true;
+    }
+
+    var prompt = String(question.prompt || "");
+    var optionsText = Array.isArray(question.options) ? question.options.join(" ") : "";
+    var combined = [prompt, optionsText].join(" ");
+    var hasLetteredVessel = LETTERED_VESSEL_PATTERN.test(combined);
+    var asksTwoVessels = TWO_VESSELS_PROMPT_PATTERN.test(prompt);
+    var asksGiveWay = GIVE_WAY_PROMPT_PATTERN.test(prompt);
+    var asksRelativeManeuver = RELATIVE_MANEUVER_PROMPT_PATTERN.test(prompt);
+
+    if (hasLetteredVessel && (asksTwoVessels || asksGiveWay || asksRelativeManeuver)) {
+      return true;
+    }
+
+    if (asksTwoVessels && asksGiveWay) {
+      return true;
+    }
+
+    return false;
   }
 
   function validateMedia(media, mediaLookup) {
@@ -710,13 +736,26 @@
     var recentPenalty = seenRecently ? -0.32 : 0;
     var frequencyPenalty = -Math.min(6, recentCounts[question.id] || 0) * 0.09;
     var generalPenalty = question.vesselType === "any" || question.area === "any" ? -0.1 : 0;
-    return (1 - mastery) + recentPenalty + frequencyPenalty + generalPenalty + randomShift;
+    var hasImage = question.media && question.media.type === "image" && String(question.media.src || "").trim();
+    var mediaBonus = hasImage ? Number((global.AppConfig && global.AppConfig.adaptation && global.AppConfig.adaptation.mediaPriorityBonus) || 0) : 0;
+    return (1 - mastery) + recentPenalty + frequencyPenalty + generalPenalty + mediaBonus + randomShift;
   }
 
-  function pickBalanced(pool, count, stats, recentIds, recentCounts) {
+  function isQuestionWithImage(question) {
+    return !!(question && question.media && question.media.type === "image" && String(question.media.src || "").trim());
+  }
+
+  function pickBalanced(pool, count, stats, recentIds, recentCounts, config) {
     var maxPerSubtopic = Math.max(2, Math.ceil(count / 3));
     var bySubtopicCount = {};
     var counts = recentCounts || {};
+    var minMediaRatio = Number(config && config.adaptation && config.adaptation.minMediaRatio);
+    if (!Number.isFinite(minMediaRatio) || minMediaRatio < 0) {
+      minMediaRatio = 0;
+    }
+    if (minMediaRatio > 1) {
+      minMediaRatio = 1;
+    }
     var ranked = pool
       .map(function (question) {
         return {
@@ -753,6 +792,40 @@
         }
         selected.push(row.q);
       });
+    }
+
+    if (minMediaRatio > 0) {
+      var targetMediaCount = Math.min(
+        Math.floor(count * minMediaRatio),
+        pool.filter(function (q) {
+          return isQuestionWithImage(q);
+        }).length
+      );
+      if (targetMediaCount > 0) {
+        var selectedMediaCount = selected.filter(function (q) {
+          return isQuestionWithImage(q);
+        }).length;
+
+        if (selectedMediaCount < targetMediaCount) {
+          var rankedMediaNotSelected = ranked
+            .map(function (row) {
+              return row.q;
+            })
+            .filter(function (q) {
+              return isQuestionWithImage(q) && selected.indexOf(q) < 0;
+            });
+          for (var i = 0; i < rankedMediaNotSelected.length && selectedMediaCount < targetMediaCount; i += 1) {
+            var replacementIndex = selected.findIndex(function (q) {
+              return !isQuestionWithImage(q);
+            });
+            if (replacementIndex < 0) {
+              break;
+            }
+            selected[replacementIndex] = rankedMediaNotSelected[i];
+            selectedMediaCount += 1;
+          }
+        }
+      }
     }
 
     return shuffle(selected.slice(0, count));
@@ -936,7 +1009,8 @@ function generateTicket(options) {
       Math.min(requested, mistakesPool.length),
       stats,
       recentQuestionIds,
-      recentQuestionCounts
+      recentQuestionCounts,
+      config
     );
     return {
       ok: candidate.length > 0,
@@ -1001,14 +1075,16 @@ function generateTicket(options) {
         Math.min(typeNeed, split.typePool.length),
         stats,
         recentQuestionIds,
-        recentQuestionCounts
+        recentQuestionCounts,
+        config
       );
       var areaPart = pickBalanced(
         split.areaPool,
         Math.min(areaNeed, split.areaPool.length),
         stats,
         recentQuestionIds,
-        recentQuestionCounts
+        recentQuestionCounts,
+        config
       );
       return uniqueBy(typePart.concat(areaPart), function (q) {
         return q.id;
@@ -1030,7 +1106,8 @@ function generateTicket(options) {
         Math.min(targetCount, pool.length),
         stats,
         recentQuestionIds,
-        recentQuestionCounts
+        recentQuestionCounts,
+        config
       );
     };
 

@@ -55,6 +55,8 @@
       recentQuestionWindow: 80,
       maxTicketOverlapRatio: 0.45,
       maxTicketGenerationAttempts: 30,
+      mediaPriorityBonus: 0.35,
+      minMediaRatio: 0.7,
     },
     limits: {
       maxSessionsStored: 150,
