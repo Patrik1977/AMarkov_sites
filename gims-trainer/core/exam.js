@@ -89,6 +89,77 @@
     };
   }
 
+  function normalizeOptionText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/["«»]/g, "")
+      .replace(/[^a-zа-я0-9\s-]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function explanationMentionsOptionIndexes(text, options) {
+    if (!text || !Array.isArray(options) || options.length === 0) {
+      return [];
+    }
+
+    var normText = normalizeOptionText(text);
+    if (!normText) {
+      return [];
+    }
+
+    var mentions = [];
+    options.forEach(function (option, index) {
+      var normOption = normalizeOptionText(option);
+      if (!normOption || normOption.length < 4) {
+        return;
+      }
+      if (normText.indexOf(normOption) >= 0) {
+        mentions.push(index);
+      }
+    });
+
+    return mentions;
+  }
+
+  function ensureExplanationMatchesCorrectOption(question) {
+    if (!question || !Array.isArray(question.options) || typeof question.correctIndex !== "number") {
+      return {
+        updated: false,
+        reason: null,
+      };
+    }
+
+    if (question.correctIndex < 0 || question.correctIndex >= question.options.length) {
+      return {
+        updated: false,
+        reason: null,
+      };
+    }
+
+    var shortMentions = explanationMentionsOptionIndexes(question.explanationShort, question.options);
+    var longMentions = explanationMentionsOptionIndexes(question.explanationLong, question.options);
+    var allMentions = shortMentions.concat(longMentions);
+    var hasMentions = allMentions.length > 0;
+    var mentionsCorrect = allMentions.indexOf(question.correctIndex) >= 0;
+
+    if (hasMentions && !mentionsCorrect) {
+      var correctText = String(question.options[question.correctIndex] || "").trim();
+      var fallback = "Правильный вариант: " + correctText + ".";
+      question.explanationShort = fallback;
+      question.explanationLong = fallback;
+      return {
+        updated: true,
+        reason: "explanation-conflict",
+      };
+    }
+
+    return {
+      updated: false,
+      reason: null,
+    };
+  }
+
   function sanitizeExplanation(text) {
     var raw = String(text || "");
     var cleaned = raw;
@@ -180,9 +251,12 @@
       out.media = null;
     }
 
+    var explanationCheck = ensureExplanationMatchesCorrectOption(out);
+
     out._normalization = {
-      explanationChanged: shortSanitized.changed || longSanitized.changed,
+      explanationChanged: shortSanitized.changed || longSanitized.changed || explanationCheck.updated,
       explanationNoiseDetected: shortSanitized.noiseDetected || longSanitized.noiseDetected,
+      explanationConflictFixed: explanationCheck.updated,
     };
 
     return out;
