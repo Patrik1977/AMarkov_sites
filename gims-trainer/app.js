@@ -316,11 +316,11 @@ function applyQuestionMediaMap(list, mediaMap) {
 
     els.quickMotorStartBtn.addEventListener("click", function () {
       els.vesselTypeSelect.value = "motor";
-      els.areaSelect.value = "inland-waters";
+      els.areaSelect.value = "inland-waterways";
       els.examScenarioSelect.value = "full";
       els.sessionModeSelect.value = "training";
       updateMistakesCountVisibility();
-      state.setupNotice = "Применены рекомендованные параметры: моторное судно, внутренние воды, полный комплект, режим тренировки.";
+      state.setupNotice = "Применены рекомендованные параметры: моторное судно, внутренние водные пути, полный комплект, режим тренировки.";
       renderSetup();
     });
 
@@ -1186,6 +1186,8 @@ function applyQuestionMediaMap(list, mediaMap) {
       percent: result.percent,
       errorsCount: result.mistakes.length,
       weakTopic: weakTopic,
+      contextKey: session.contextKey || null,
+      signature: session.signature || null,
       questionIds: session.questions.map(function (q) {
         return q.id;
       }),

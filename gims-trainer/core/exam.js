@@ -490,16 +490,115 @@
     stats.recentTicketSignatures[contextKey] = unique.slice(0, maxLen);
   }
 
-  function collectRecentQuestionIds(stats, limit) {
-    var ids = [];
-    (stats.sessions || []).slice(0, limit).forEach(function (session) {
-      if (Array.isArray(session.questionIds)) {
-        ids = ids.concat(session.questionIds);
+  function resolveSessionContextKey(session) {
+    if (!session || typeof session !== "object") {
+      return "";
+    }
+    if (session.contextKey) {
+      return session.contextKey;
+    }
+    return buildContextKey({
+      scenario: session.scenario,
+      vesselType: session.vesselType,
+      area: session.area,
+      sessionMode: session.sessionMode,
+    });
+  }
+
+  function collectRecentContextSessions(stats, contextKey, limitSessions) {
+    var sessions = stats.sessions || [];
+    var out = [];
+    var cap = Math.max(1, Number(limitSessions) || 1);
+
+    for (var i = 0; i < sessions.length; i += 1) {
+      var session = sessions[i];
+      if (!session || !Array.isArray(session.questionIds) || session.questionIds.length === 0) {
+        continue;
+      }
+
+      var sessionContextKey = resolveSessionContextKey(session);
+      if (contextKey && sessionContextKey && sessionContextKey !== contextKey) {
+        continue;
+      }
+
+      out.push(session);
+      if (out.length >= cap) {
+        break;
+      }
+    }
+
+    return out;
+  }
+
+  function collectRecentQuestionIds(stats, contextKey, questionLimit, sessionLimit) {
+    var sessions = collectRecentContextSessions(stats, contextKey, sessionLimit);
+    var out = [];
+    var seen = {};
+    var cap = Math.max(1, Number(questionLimit) || 1);
+
+    for (var i = 0; i < sessions.length; i += 1) {
+      var questionIds = sessions[i].questionIds || [];
+      for (var j = 0; j < questionIds.length; j += 1) {
+        var id = questionIds[j];
+        if (seen[id]) {
+          continue;
+        }
+        seen[id] = true;
+        out.push(id);
+        if (out.length >= cap) {
+          return out;
+        }
+      }
+    }
+
+    return out;
+  }
+
+  function collectRecentQuestionCounts(stats, contextKey, sessionLimit) {
+    var sessions = collectRecentContextSessions(stats, contextKey, sessionLimit);
+    var counts = {};
+
+    sessions.forEach(function (session) {
+      (session.questionIds || []).forEach(function (id) {
+        counts[id] = (counts[id] || 0) + 1;
+      });
+    });
+
+    return counts;
+  }
+
+  function collectRecentQuestionSets(stats, contextKey, sessionLimit) {
+    return collectRecentContextSessions(stats, contextKey, sessionLimit).map(function (session) {
+      return uniqueBy(session.questionIds || [], function (id) {
+        return id;
+      });
+    });
+  }
+
+  function maxOverlapCount(ids, recentSets) {
+    if (!Array.isArray(ids) || !ids.length || !Array.isArray(recentSets) || !recentSets.length) {
+      return 0;
+    }
+
+    var lookup = {};
+    ids.forEach(function (id) {
+      lookup[id] = true;
+    });
+
+    var maxOverlap = 0;
+    recentSets.forEach(function (setIds) {
+      var overlap = 0;
+      (setIds || []).forEach(function (id) {
+        if (lookup[id]) {
+          overlap += 1;
+        }
+      });
+      if (overlap > maxOverlap) {
+        maxOverlap = overlap;
       }
     });
-    return uniqueBy(ids, function (id) {
-      return id;
-    });
+
+    return maxOverlap;
   }
 
   function buildBasePool(allQuestions, scenario, vesselType, area) {
@@ -530,22 +629,25 @@
     return allQuestions.slice();
   }
 
-  function questionPriority(question, stats, recentIds, randomShift) {
+  function questionPriority(question, stats, recentIds, recentCounts, randomShift) {
     var qStat = stats.questionStats[question.id] || null;
     var mastery = qStat && typeof qStat.masteryScore === "number" ? qStat.masteryScore : 0;
-    var recentPenalty = recentIds.indexOf(question.id) >= 0 ? -0.6 : 0;
-    var generalPenalty = question.vesselType === "any" || question.area === "any" ? -0.12 : 0;
-    return (1 - mastery) + recentPenalty + generalPenalty + randomShift;
+    var seenRecently = recentIds.indexOf(question.id) >= 0;
+    var recentPenalty = seenRecently ? -0.32 : 0;
+    var frequencyPenalty = -Math.min(6, recentCounts[question.id] || 0) * 0.09;
+    var generalPenalty = question.vesselType === "any" || question.area === "any" ? -0.1 : 0;
+    return (1 - mastery) + recentPenalty + frequencyPenalty + generalPenalty + randomShift;
   }
 
-  function pickBalanced(pool, count, stats, recentIds) {
+  function pickBalanced(pool, count, stats, recentIds, recentCounts) {
     var maxPerSubtopic = Math.max(2, Math.ceil(count / 3));
     var bySubtopicCount = {};
+    var counts = recentCounts || {};
     var ranked = pool
       .map(function (question) {
         return {
           q: question,
-          score: questionPriority(question, stats, recentIds, Math.random() * 0.55),
+          score: questionPriority(question, stats, recentIds, counts, Math.random() * 0.75),
         };
       })
       .sort(function (a, b) {
@@ -583,26 +685,26 @@
   }
 
   function avoidRecentWhenPossible(pool, recentIds, desiredCount) {
-  var fresh = pool.filter(function (q) {
-    return recentIds.indexOf(q.id) < 0;
-  });
+    var fresh = pool.filter(function (q) {
+      return recentIds.indexOf(q.id) < 0;
+    });
 
-  if (fresh.length >= desiredCount) {
-    return fresh;
+    if (fresh.length >= desiredCount) {
+      return shuffle(fresh);
+    }
+
+    var minFresh = Math.max(3, Math.floor(desiredCount * 0.6));
+    if (fresh.length >= minFresh) {
+      var stale = shuffle(
+        pool.filter(function (q) {
+          return recentIds.indexOf(q.id) >= 0;
+        })
+      );
+      return shuffle(fresh).concat(stale);
+    }
+
+    return shuffle(pool);
   }
-
-  var minFresh = Math.max(3, Math.floor(desiredCount * 0.6));
-  if (fresh.length >= minFresh) {
-    var stale = shuffle(
-      pool.filter(function (q) {
-        return recentIds.indexOf(q.id) >= 0;
-      })
-    );
-    return fresh.concat(stale);
-  }
-
-  return pool;
-}
 
   function calculateScenarioCount(config, scenario) {
     if (scenario === "type-ticket") return config.ticketSize.typeTicket;
@@ -706,10 +808,22 @@ function generateTicket(options) {
 
   var contextKey = buildContextKey(options);
   var recentSignatures = getRecentSignatures(stats, contextKey);
-  var recentQuestionIds = collectRecentQuestionIds(stats, config.adaptation.recentQuestionWindow);
+  var recentQuestionIds = collectRecentQuestionIds(
+    stats,
+    contextKey,
+    config.adaptation.recentQuestionWindow,
+    config.adaptation.recentTicketWindow
+  );
+  var recentQuestionCounts = collectRecentQuestionCounts(stats, contextKey, config.adaptation.recentTicketWindow);
+  var recentQuestionSets = collectRecentQuestionSets(stats, contextKey, config.adaptation.recentTicketWindow);
+  var overlapRatio =
+    typeof config.adaptation.maxTicketOverlapRatio === "number"
+      ? config.adaptation.maxTicketOverlapRatio
+      : 0.55;
 
   var warningBag = [];
   var candidate = [];
+  var candidateFactory = null;
 
   if (scenario === "mistakes") {
     var mistakesPool = buildMistakesPool(questions, stats, config, vesselType, area);
@@ -743,7 +857,13 @@ function generateTicket(options) {
       );
     }
 
-    candidate = pickBalanced(mistakesPool, Math.min(requested, mistakesPool.length), stats, recentQuestionIds);
+    candidate = pickBalanced(
+      mistakesPool,
+      Math.min(requested, mistakesPool.length),
+      stats,
+      recentQuestionIds,
+      recentQuestionCounts
+    );
     return {
       ok: candidate.length > 0,
       reason: candidate.length > 0 ? null : "no-mistakes",
@@ -801,11 +921,27 @@ function generateTicket(options) {
       warningBag.push("Недостаточно вопросов по району плавания: доступно " + split.areaPool.length + " из " + areaNeed + ".");
     }
 
-    var typePart = pickBalanced(split.typePool, Math.min(typeNeed, split.typePool.length), stats, recentQuestionIds);
-    var areaPart = pickBalanced(split.areaPool, Math.min(areaNeed, split.areaPool.length), stats, recentQuestionIds);
-    candidate = uniqueBy(typePart.concat(areaPart), function (q) {
-      return q.id;
-    });
+    candidateFactory = function () {
+      var typePart = pickBalanced(
+        split.typePool,
+        Math.min(typeNeed, split.typePool.length),
+        stats,
+        recentQuestionIds,
+        recentQuestionCounts
+      );
+      var areaPart = pickBalanced(
+        split.areaPool,
+        Math.min(areaNeed, split.areaPool.length),
+        stats,
+        recentQuestionIds,
+        recentQuestionCounts
+      );
+      return uniqueBy(typePart.concat(areaPart), function (q) {
+        return q.id;
+      });
+    };
+
+    candidate = candidateFactory();
   } else {
     var targetCount = calculateScenarioCount(config, scenario);
     var pool = buildBasePool(questions, scenario, vesselType, area);
@@ -813,7 +949,18 @@ function generateTicket(options) {
     if (pool.length < targetCount) {
       warningBag.push("Для сценария доступно " + pool.length + " валидных вопросов из " + targetCount + ".");
     }
-    candidate = pickBalanced(pool, Math.min(targetCount, pool.length), stats, recentQuestionIds);
+
+    candidateFactory = function () {
+      return pickBalanced(
+        pool,
+        Math.min(targetCount, pool.length),
+        stats,
+        recentQuestionIds,
+        recentQuestionCounts
+      );
+    };
+
+    candidate = candidateFactory();
   }
 
   if (candidate.length === 0) {
@@ -828,33 +975,70 @@ function generateTicket(options) {
   }
 
   var selected = candidate;
-  var selectedSignature = questionSignature(
-    selected.map(function (q) {
-      return q.id;
-    })
-  );
+  var selectedIds = selected.map(function (q) {
+    return q.id;
+  });
+  var selectedSignature = questionSignature(selectedIds);
+  var maxAllowedOverlap = Math.max(2, Math.floor(selectedIds.length * overlapRatio));
+  var selectedOverlap = maxOverlapCount(selectedIds, recentQuestionSets);
+  var hasFreshSignature = recentSignatures.indexOf(selectedSignature) < 0;
 
-  if (recentSignatures.indexOf(selectedSignature) >= 0) {
-    var improved = null;
+  if ((!hasFreshSignature || selectedOverlap > maxAllowedOverlap) && candidateFactory) {
+    var best = selected;
+    var bestIds = selectedIds;
+    var bestSignature = selectedSignature;
+    var bestOverlap = selectedOverlap;
+    var bestFresh = hasFreshSignature;
     var attempts = 0;
+
     while (attempts < config.adaptation.maxTicketGenerationAttempts) {
       attempts += 1;
-      var alt = shuffle(candidate).slice(0, candidate.length);
-      var altSig = questionSignature(
-        alt.map(function (q) {
-          return q.id;
-        })
-      );
-      if (recentSignatures.indexOf(altSig) < 0) {
-        improved = alt;
-        selectedSignature = altSig;
+
+      var alt = candidateFactory();
+      if (!alt || alt.length === 0) {
+        continue;
+      }
+
+      var altIds = alt.map(function (q) {
+        return q.id;
+      });
+      var altSignature = questionSignature(altIds);
+      var altFresh = recentSignatures.indexOf(altSignature) < 0;
+      var altOverlap = maxOverlapCount(altIds, recentQuestionSets);
+
+      var better = false;
+      if (altFresh && !bestFresh) {
+        better = true;
+      } else if (altFresh === bestFresh && altOverlap < bestOverlap) {
+        better = true;
+      } else if (altFresh === bestFresh && altOverlap === bestOverlap && Math.random() > 0.5) {
+        better = true;
+      }
+
+      if (better) {
+        best = alt;
+        bestIds = altIds;
+        bestSignature = altSignature;
+        bestOverlap = altOverlap;
+        bestFresh = altFresh;
+      }
+
+      if (altFresh && altOverlap <= maxAllowedOverlap) {
         break;
       }
     }
-    if (improved) {
-      selected = improved;
-    } else {
-      warningBag.push("Не удалось собрать полностью новый набор: банк ограничен.");
+
+    selected = best;
+    selectedIds = bestIds;
+    selectedSignature = bestSignature;
+    selectedOverlap = bestOverlap;
+    hasFreshSignature = bestFresh;
+
+    if (!hasFreshSignature) {
+      warningBag.push("Банк ограничен: полностью новый набор вопросов собрать не удалось.");
+    }
+    if (selectedOverlap > maxAllowedOverlap) {
+      warningBag.push("Часть вопросов повторяется из недавних билетов из-за ограничений выбранного фильтра.");
     }
   }
 

@@ -6,7 +6,7 @@
       scenario: "full",
       sessionMode: "training",
       vesselType: "motor",
-      area: "inland-waters",
+      area: "inland-waterways",
       mistakesCount: 5,
     },
     scenarios: {
@@ -53,6 +53,7 @@
       masteryDecayPerDay: 0.004,
       recentTicketWindow: 12,
       recentQuestionWindow: 80,
+      maxTicketOverlapRatio: 0.45,
       maxTicketGenerationAttempts: 30,
     },
     limits: {
